@@ -1,7 +1,8 @@
 import numpy as np
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional, Tuple, Callable
 from numba import njit, types
 from enum import IntEnum
+import warnings
 
 class OptionType(IntEnum):
     CALL = 0
@@ -16,6 +17,20 @@ class BinomialTreeError(Exception):
 
 class InputValidationError(BinomialTreeError):
     """Raised for invalid input parameters"""
+
+class NumericalWarning(UserWarning):
+    """Warnings about numerical precision issues"""
+
+def error_handler(func: Callable) -> Callable:
+    """Decorator to wrap all public methods with consistent error handling"""
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except BinomialTreeError:
+            raise
+        except Exception as e:
+            raise BinomialTreeError(f"Unexpected error in {func.__name__}: {str(e)}") from e
+    return wrapper
 
 @njit(cache=True, fastmath=True)
 def _compute_asset_prices(S: float, u: float, d: float, n_steps: int) -> np.ndarray:
@@ -63,11 +78,12 @@ def _backward_induction(
 
 class BinomialTree:
     """
-    High-performance CRR binomial tree pricer with:
-    - American/European exercise
-    - Tree-based Greeks for American
-    - Numba acceleration
-    - Full validation and edge case handling
+    Production-grade CRR binomial tree pricer with:
+    - Comprehensive error handling
+    - Type enforcement
+    - Numerical stability safeguards
+    - Full Numba acceleration
+    - Explicit documentation
     """
     
     def __init__(self, num_steps: int = 500):
@@ -86,6 +102,14 @@ class BinomialTree:
         exercise_style: Literal["european", "american"],
         q: float
     ) -> Tuple[int, int]:
+        # Type enforcement
+        for param, name in [
+            (S, "S"), (K, "K"), (T, "T"),
+            (r, "r"), (sigma, "sigma"), (q, "q")
+        ]:
+            if not isinstance(param, (int, float, np.floating)):
+                raise InputValidationError(f"{name} must be numeric, got {type(param)}")
+        
         if option_type not in {"call", "put"}:
             raise InputValidationError("option_type must be 'call' or 'put'")
         if exercise_style not in {"european", "american"}:
@@ -109,7 +133,7 @@ class BinomialTree:
         sigma: float,
         q: float
     ) -> Tuple[float, float, float, float]:
-        """Centralized parameter calculation for reuse"""
+        """Centralized parameter calculation with numerical safeguards"""
         dt = T / self.num_steps
         u = np.exp(sigma * np.sqrt(dt))
         d = 1.0 / u
@@ -117,11 +141,24 @@ class BinomialTree:
         p_den = u - d
         
         if abs(p_den) < 1e-10:
-            raise BinomialTreeError("u and d are equal (dt too small?)")
+            raise InputValidationError("u and d are equal (dt too small?)")
             
         p = p_num / p_den
+        
+        # Handle floating point errors in probability
+        if p < -1e-8 or p > 1 + 1e-8:
+            raise InputValidationError(f"Invalid probability: {p:.6f}")
+        
+        if p < 0.0:
+            warnings.warn(f"Clamped p={p:.6f} to 0.0", NumericalWarning)
+            p = 0.0
+        elif p > 1.0:
+            warnings.warn(f"Clamped p={p:.6f} to 1.0", NumericalWarning)
+            p = 1.0
+        
         return u, d, p, dt
 
+    @error_handler
     def price(
         self,
         S: float,
@@ -147,9 +184,6 @@ class BinomialTree:
         )
         u, d, p, dt = self._compute_params(S, K, T, r, sigma, q)
         
-        if not (-1e-8 <= p <= 1 + 1e-8):
-            raise BinomialTreeError(f"Invalid probability: {p:.6f}")
-        
         asset_prices = _compute_asset_prices(S, u, d, self.num_steps)
         option_values = _backward_induction(
             asset_prices, K, r, dt, p, ot, es
@@ -157,6 +191,7 @@ class BinomialTree:
         
         return option_values[0, 0]
 
+    @error_handler
     def delta(
         self,
         S: float,
@@ -172,7 +207,7 @@ class BinomialTree:
         ot, es = self._validate_inputs(
             S, K, T, r, sigma, option_type, exercise_style, q
         )
-        h = h or max(S * 1e-4, 1e-6)  # Default bump size
+        h = h or max(S * 1e-4, 1e-6)
         
         if es == ExerciseStyle.AMERICAN:
             u, d, p, dt = self._compute_params(S, K, T, r, sigma, q)
@@ -186,6 +221,7 @@ class BinomialTree:
         price_down = self.price(S - h, K, T, r, sigma, option_type, exercise_style, q)
         return (price_up - price_down) / (2*h)
 
+    @error_handler
     def gamma(
         self,
         S: float,
