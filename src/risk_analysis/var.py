@@ -68,14 +68,12 @@ class VaRAnalyzer:
         Calculate VaR using historical simulation
         
         Parameters:
-        -----------
         returns : array-like
             Historical returns (daily or adjusted for time horizon)
         portfolio_value : float
             Total portfolio value in base currency
             
         Returns:
-        --------
         dict with VaR and CVaR metrics
         """
         self._validate_inputs(portfolio_value)
@@ -115,7 +113,6 @@ class VaRAnalyzer:
         Calculate VaR using Monte Carlo simulation
         
         Parameters:
-        -----------
         initial_price : float
             Current price of the asset
         mu : float
@@ -132,7 +129,6 @@ class VaRAnalyzer:
             Option pricer for path-dependent instruments
             
         Returns:
-        --------
         dict with VaR and CVaR metrics
         """
         self._validate_inputs(portfolio_value)
