@@ -48,12 +48,12 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
     └── src
         ├── greeks/
         │   ├── __init__.py
-        │   └── calculate_greeks.py
+        │   └── greeks.py
         ├── pricing_models/
         │   ├── __init__.py
         │   ├── black_scholes.py
         │   ├── binomial_tree.py
-        │   └── utils.py
+        │   └── monte_carlo.py
         ├── risk_analysis/
         │   ├── __init__.py
         │   └── portfolio_risk.py
