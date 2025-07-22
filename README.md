@@ -56,10 +56,8 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
         │   └── monte_carlo.py
         ├── risk_analysis/
         │   ├── __init__.py
-        │   └── portfolio_risk.py
-        └── simulation/
-            ├── __init__.py
-            └── monte_carlo.py
+        │   └── var.py
+        
 
 ---
 
