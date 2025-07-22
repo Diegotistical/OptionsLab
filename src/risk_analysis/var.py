@@ -1,3 +1,5 @@
+# src / risk_analysis / var.py
+
 """
 Value at Risk (VaR) Calculation Module
 
