@@ -22,7 +22,7 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
 - Customizable drift, volatility, time steps, paths
 
 ✅ **Greeks Calculation**
-- Delta, Gamma, Vega, Theta, Rho
+- Delta, Gamma, Vega, Theta, Rho & Second-order Greeks
 - Analytical and finite-difference methods
 
 ✅ **Portfolio Risk Analysis**
