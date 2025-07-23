@@ -97,11 +97,14 @@ def _delta(
     h: float,
     P: callable,
 ) -> float:
+    """
+    First derivative w.r.t. spot price.
+    """
     if exercise_style == ExerciseStyle.AMERICAN:
         u, d, p, dt = model._compute_params(S, K, T, r, sigma, q)
         asset_prices = model._compute_asset_prices(S, u, d, model.num_steps)
         option_values = model._backward_induction(asset_prices, K, r, dt, p, option_type.value, exercise_style.value)
-        return (option_values[1,1] - option_values[1,0]) / (S * (u - d))
+        return (option_values[1, 1] - option_values[1, 0]) / (S * (u - d))
     else:
         return (P(S + h, K, T, r, sigma, q) - P(S - h, K, T, r, sigma, q)) / (2 * h)
 
@@ -118,14 +121,17 @@ def _gamma(
     h: float,
     P: callable,
 ) -> float:
-    if exercise_style == ExerciseStyle.AMERICAN and model.num_steps < 3:
-        raise InputValidationError("American Gamma requires num_steps >= 3")
+    """
+    Second derivative w.r.t. spot price.
+    """
     if exercise_style == ExerciseStyle.AMERICAN:
+        if model.num_steps < 3:
+            raise InputValidationError("American Gamma requires num_steps >= 3")
         u, d, p, dt = model._compute_params(S, K, T, r, sigma, q)
         asset_prices = model._compute_asset_prices(S, u, d, model.num_steps)
         option_values = model._backward_induction(asset_prices, K, r, dt, p, option_type.value, exercise_style.value)
-        delta_up = (option_values[2,2] - option_values[2,1]) / (S * u * (u - d))
-        delta_down = (option_values[2,1] - option_values[2,0]) / (S * d * (u - d))
+        delta_up = (option_values[2, 2] - option_values[2, 1]) / (S * u * (u - d))
+        delta_down = (option_values[2, 1] - option_values[2, 0]) / (S * d * (u - d))
         return (delta_up - delta_down) / (S * (u - d))
     else:
         return (P(S + h, K, T, r, sigma, q) - 2 * P(S, K, T, r, sigma, q) + P(S - h, K, T, r, sigma, q)) / (h * h)
@@ -143,6 +149,9 @@ def _vega(
     h: float,
     P: callable,
 ) -> float:
+    """
+    First derivative w.r.t. volatility.
+    """
     return (P(S, K, T, r, sigma + h, q) - P(S, K, T, r, sigma - h, q)) / (2 * h)
 
 def _theta(
@@ -157,11 +166,15 @@ def _theta(
     q: float,
     P: callable,
 ) -> float:
-    time_bump = 1 / 365
-    if T > time_bump:
-        return (P(S, K, T - time_bump, r, sigma, q) - P(S, K, T, r, sigma, q)) / time_bump
+    """
+    First derivative w.r.t. time (negative means value decays).
+    """
+    dt = 1 / 365
+    if T > dt:
+        return (P(S, K, T - dt, r, sigma, q) - P(S, K, T, r, sigma, q)) / dt
     else:
-        return (P(S, K, max(T - time_bump, 0.0001), r, sigma, q) - P(S, K, T, r, sigma, q)) / time_bump
+        # Very close to expiry — interpret as max decay
+        return -P(S, K, T, r, sigma, q) / dt
 
 def _rho(
     model: BinomialTree,
@@ -176,9 +189,10 @@ def _rho(
     h: float,
     P: callable,
 ) -> float:
+    """
+    First derivative w.r.t. interest rate.
+    """
     return (P(S, K, T, r + h, sigma, q) - P(S, K, T, r, sigma, q)) / h
-
-# Second-order Greeks (placeholder implementations)
 
 def _vanna(
     model: BinomialTree,
@@ -193,7 +207,14 @@ def _vanna(
     h: float,
     P: callable,
 ) -> float:
-    return (P(S + h, K, T, r, sigma + h, q) - P(S - h, K, T, r, sigma - h, q)) / (4 * h * h)
+    """
+    Cross derivative w.r.t. spot and volatility.
+    """
+    up_up = P(S + h, K, T, r, sigma + h, q)
+    up_down = P(S + h, K, T, r, sigma - h, q)
+    down_up = P(S - h, K, T, r, sigma + h, q)
+    down_down = P(S - h, K, T, r, sigma - h, q)
+    return (up_up - up_down - down_up + down_down) / (4 * h * h)
 
 def _charm(
     model: BinomialTree,
@@ -208,8 +229,13 @@ def _charm(
     h: float,
     P: callable,
 ) -> float:
-    time_bump = 1 / 365
-    return (P(S + h, K, T - time_bump, r, sigma, q) - P(S - h, K, T - time_bump, r, sigma, q)) / (2 * h * time_bump)
+    """
+    Time decay of Delta: d(Delta)/dt
+    """
+    dt = 1 / 365
+    delta_now = _delta(model, S, K, T, r, sigma, option_type, exercise_style, q, h, P)
+    delta_future = _delta(model, S, K, T - dt, r, sigma, option_type, exercise_style, q, h, P)
+    return (delta_future - delta_now) / dt
 
 def _vomma(
     model: BinomialTree,
@@ -224,4 +250,7 @@ def _vomma(
     h: float,
     P: callable,
 ) -> float:
+    """
+    Second derivative w.r.t. volatility (sensitivity of Vega).
+    """
     return (P(S, K, T, r, sigma + h, q) - 2 * P(S, K, T, r, sigma, q) + P(S, K, T, r, sigma - h, q)) / (h * h)
