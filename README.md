@@ -59,18 +59,18 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
         │   └── var.py
         volatility_surface/
         ├── __init__.py
-        ├── base.py                     # Clase abstracta VolatilityModelBase
+        ├── base.py                     # VolatilityModelBase
         ├── models/
         │   ├── __init__.py
-        │   ├── svr_model.py            # SVRModel (usa sklearn)
-        │   ├── mlp_model.py            # MLPModel (usa PyTorch)
-        │   ├── xgboost_model.py        # XGBoostModel (usa xgboost)
+        │   ├── svr_model.py            
+        │   ├── mlp_model.py        
+        │   ├── xgboost_model.py      
         ├── utils/
         │   ├── __init__.py
-        │   ├── feature_engineering.py  # transformaciones como moneyness, skew, etc.
-        │   ├── data_preprocessing.py   # escalado, validación de dominio
-        │   ├── grid_search.py          # funciones de tuning (si aplicas GridSearchCV)
-        ├── surface_generator.py        # Clase SurfaceGenerator (o manager
+        │   ├── feature_engineering.py  
+        │   ├── data_preprocessing.py  
+        │   ├── grid_search.py         
+        ├── surface_generator.py        
                 
 
 ---
