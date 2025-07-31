@@ -1,4 +1,4 @@
-# 📈 Quant Options Toolkit
+# 📈 Options Lab
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/github/license/Diegotistical/quant-options-toolkit)](LICENSE)
