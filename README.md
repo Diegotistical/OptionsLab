@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/github/license/Diegotistical/quant-options-toolkit)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/Diegotistical/quant-options-toolkit)](https://github.com/Diegotistical/quant-options-toolkit/commits/main)
 
-**Quant Options Toolkit** is a Python library for quantitative finance practitioners, researchers, and students. It provides models, simulations, and risk analysis tools for pricing and analyzing options and derivatives portfolios.
+**Options Lab** is a Python library for quantitative finance practitioners, researchers, and students. It provides models, simulations, and risk analysis tools for pricing and analyzing options and derivatives portfolios.
 
 The toolkit is designed to be modular and extensible, enabling you to integrate custom models, stochastic processes, or analytics pipelines.
 
