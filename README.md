@@ -69,7 +69,9 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
         │   ├── __init__.py
         │   ├── feature_engineering.py  
         │   ├── data_preprocessing.py  
-        │   ├── grid_search.py         
+        │   ├── grid_search.py
+        │   ├── arbitrage.py
+        │   ├── arbitrage_utils.py
         ├── surface_generator.py        
                 
 
@@ -202,5 +204,6 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
