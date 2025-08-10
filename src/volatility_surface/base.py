@@ -220,4 +220,4 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(trained={self.trained}, features={self.feature_columns})>"
-    
+
