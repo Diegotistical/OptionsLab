@@ -224,3 +224,4 @@ class MLPModel(VolatilityModelBase, nn.Module):
             self.load_state_dict(data['model_state_dict'])
             self.scaler = joblib.load(scaler_path)
             self.trained = True
+
