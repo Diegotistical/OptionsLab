@@ -1,492 +1,383 @@
-# src / risk_analysis / var.py
+# src/risk_analysis/var.py
 
 """
-Value at Risk (VaR) Calculation Module
+Value at Risk (VaR) and Conditional VaR (Expected Shortfall).
 
-Implements:
-- Historical VaR
-- Monte Carlo VaR (with BinomialTree integration)
-- Parametric VaR (normal/log-normal)
-- Conditional VaR (CVaR)
-- Stress test scenarios
+Design goals:
+- Explicit conventions: returns / pnl are PnL (positive = profit). VaR/ES are returned
+  as **positive numbers representing expected loss** (so larger => worse).
+- Deterministic randomness via numpy Generator (seedable).
+- Defensive input validation with clear exceptions.
+- Thread-safe for multi-threaded scenario runs.
+- Accepts vectorized pricer functions for option-aware VaR for performance; falls back to loop with warning.
+- Small built-in benchmarking hooks and structured logging.
 """
 
-from typing import Union, List, Dict, Optional, Tuple, Callable
+from __future__ import annotations
+
+import math
+import time
+import threading
+from typing import Callable, Iterable, List, Optional, Tuple, Dict, Any
+
 import numpy as np
 import pandas as pd
-import warnings
 from scipy.stats import norm
-from src.exceptions import RiskAnalysisError, InputValidationError
-from src.pricing_models.binomial_tree import BinomialTree
+import logging
+
+# Prefer your project's validation helpers if present
+try:
+    from ..common.validation import check_required_columns  # type: ignore
+except Exception:
+    # Fallback minimal validator
+    def check_required_columns(df: pd.DataFrame, cols: List[str]) -> None:
+        missing = set(cols) - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
 
 
+logger = logging.getLogger(__name__)
+
+
+#  Exceptions
+class VaRError(RuntimeError):
+    """Base exception type for VaR module."""
+
+
+class InputValidationError(VaRError):
+    """Input validation error."""
+
+
+#  Utilities 
+def _timeit(func: Callable) -> Callable:
+    """Simple timing decorator that logs duration at INFO level."""
+
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        res = func(*args, **kwargs)
+        end = time.perf_counter()
+        logger.info("%s took %.4f s", func.__name__, end - start)
+        return res
+
+    return wrapper
+
+
+def _as_array(x: Iterable[float]) -> np.ndarray:
+    arr = np.asarray(list(x), dtype=float).ravel()
+    if arr.size == 0:
+        raise InputValidationError("Input sequence is empty")
+    return arr
+
+
+def _validate_confidence(alpha: float) -> None:
+    if not (0.0 < alpha < 1.0):
+        raise InputValidationError("confidence_level must be in (0,1)")
+
+
+#  Main class 
 class VaRAnalyzer:
     """
-    Features:
-    - Historical simulation
-    - Monte Carlo simulation (option-aware)
-    - Parametric normal/log-normal VaR
-    - Conditional VaR (CVaR)
-    - Portfolio-level stress testing
+    Production-ready VaR analyzer.
+
+    Conventions:
+      - All `returns` / `pnl` inputs are PnL values: positive = profit, negative = loss.
+      - VaR and ES (CVaR) are returned as **positive** values representing expected loss.
+        (So `var=0.05` means expected loss of 0.05 units per unit notional.)
     """
 
     def __init__(self, confidence_level: float = 0.95, time_horizon_days: int = 1):
-        if not 0 < confidence_level < 1:
-            raise InputValidationError("Confidence level must be between 0 and 1")
+        _validate_confidence(confidence_level)
         if time_horizon_days <= 0:
-            raise InputValidationError("Time horizon must be positive")
+            raise InputValidationError("time_horizon_days must be >= 1")
 
-        self.confidence_level = confidence_level
-        self.time_horizon_days = time_horizon_days
-        self.z_score = norm.ppf(1 - (1 - confidence_level)) # critical z-value for VaR
-        self.scaling_factor = self.time_horizon_days / 365  # convert annual to time horizon scale
+        self.confidence_level = float(confidence_level)
+        self.time_horizon_days = int(time_horizon_days)
+        self.horizon_frac = float(self.time_horizon_days) / 365.0
+        # left-tail z (quantile for returns' left tail)
+        self._z_left = norm.ppf(1.0 - self.confidence_level)
+        self._lock = threading.RLock()
 
-    def _validate_inputs(self, portfolio_value: float):
-        if portfolio_value <= 0:
-            raise InputValidationError("Portfolio value must be positive")
-        if not isinstance(portfolio_value, (int, float)):
-            raise InputValidationError("Portfolio value must be numeric")
+    # Low-level helpers
+    
+    @staticmethod
+    def _empirical_var_es_from_pnl(pnl: Iterable[float], alpha: float) -> Tuple[float, float]:
+        """Return (var_loss, es_loss) where both are positive numbers representing loss."""
+        _validate_confidence(alpha)
+        arr = _as_array(pnl)
+        cutoff = np.quantile(arr, 1.0 - alpha)
+        var_loss = -float(cutoff)  # positive value representing loss at VaR
+        tail = arr[arr <= cutoff]
+        if tail.size == 0:
+            # defensive fallback: worst observed loss
+            es_loss = -float(np.min(arr))
+        else:
+            es_loss = -float(np.mean(tail))
+        return var_loss, es_loss
 
-    def _calculate_cvar(self, sorted_losses: np.ndarray) -> float:
-        """Helper for CVaR calculation"""
-        index = int(np.floor((1 - self.confidence_level) * len(sorted_losses)))
-        return np.mean(sorted_losses[:index])
+    # Historical (non-parametric)
+
+    @_timeit
+    def historical_var(self, pnl_series: Iterable[float], scale: Optional[float] = None) -> Dict[str, Any]:
         """
-        * Given an array of sorted losses (ascending), compute the Conditional VaR (CVaR).
+        Historical VaR and ES computed directly from PnL series.
 
-        * CVaR is the average loss in the worst-case tail beyond the VaR percentile.
-
-        * More conservative risk metric than VaR alone.
-        """
-
-    def historical_var(
-        self,
-        returns: Union[pd.Series, np.ndarray],
-        portfolio_value: float
-    ) -> Dict[str, float]:
-        """
-        Calculate VaR using historical simulation
-        
         Parameters:
-        returns : array-like
-            Historical returns (daily or adjusted for time horizon)
-        portfolio_value : float
-            Total portfolio value in base currency
-            
+        pnl_series : Iterable[float]
+            PnL time series (same periodicity as horizon or daily; we do not rescale here).
+        scale : Optional[float]
+            If given, results are multiplied by scale (e.g., portfolio value).
+
         Returns:
-        dict with VaR and CVaR metrics
+        dict with 'var', 'cvar', 'confidence_level', 'samples'
         """
-        self._validate_inputs(portfolio_value)
-        
-        # Convert to numpy array if needed
-        returns_array = np.array(returns)
-        
-        # Validate input data
-        if len(returns_array) < 252:
-            warnings.warn("Insufficient historical data for reliable VaR calculation")
-        
-        # Sort returns and calculate VaR
-        sorted_returns = np.sort(returns_array)
-        index = int(np.floor((1 - self.confidence_level) * len(sorted_returns)))
-        
-        var = -sorted_returns[index] * portfolio_value
-        cvar = -self._calculate_cvar(sorted_returns) * portfolio_value
-        
+        arr = _as_array(pnl_series)
+        if arr.size < 30:
+            logger.warning("historical_var: small sample size (n=%d). Results may be unstable.", arr.size)
+
+        var_loss, es_loss = self._empirical_var_es_from_pnl(arr, self.confidence_level)
+        s = float(scale) if scale is not None else 1.0
         return {
-            'var': var,
-            'cvar': cvar,
-            'confidence_level': self.confidence_level,
-            'time_horizon_days': self.time_horizon_days
+            "var": var_loss * s,
+            "cvar": es_loss * s,
+            "confidence_level": self.confidence_level,
+            "samples": arr.size,
         }
 
+    # Parametric
+
+    @_timeit
+    def parametric_var(
+        self,
+        mu: float,
+        sigma: float,
+        scale: Optional[float] = None,
+        assume_log_returns: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Parametric VaR under normal or log-normal assumptions.
+
+        Parameters:
+        mu, sigma : float
+            Annualized mean and volatility of returns (same units).
+        scale : Optional[float]
+            Multiply relative loss by scale to get monetary VaR.
+        assume_log_returns : bool
+            If True, assume log-returns (GBM); otherwise normal returns.
+
+        Returns:
+        dict with 'var' and 'cvar' (positive losses).
+        """
+        mu = float(mu)
+        sigma = float(sigma)
+        if sigma <= 0.0:
+            raise InputValidationError("sigma must be positive")
+        mu_h = mu * self.horizon_frac
+        sigma_h = sigma * math.sqrt(self.horizon_frac)
+
+        if assume_log_returns:
+            # left quantile for log-returns
+            q = norm.ppf(1.0 - self.confidence_level, loc=mu_h, scale=sigma_h)
+            var_rel = max(0.0, 1.0 - math.exp(q))  # positive relative loss at VaR
+            # approximate ES for log-normal left tail using conditional expectation formula
+            # handle numerical edge cases defensively
+            try:
+                denom = norm.cdf((q - mu_h) / sigma_h)
+                if denom <= 0 or math.isnan(denom):
+                    es_rel = var_rel
+                else:
+                    numer = norm.cdf((q - mu_h - sigma_h**2) / sigma_h)
+                    e_exp = math.exp(mu_h + 0.5 * sigma_h**2) * (numer / denom)
+                    es_rel = max(0.0, 1.0 - e_exp)
+            except Exception:
+                es_rel = var_rel
+            var_loss, es_loss = var_rel, es_rel
+        else:
+            # Normal returns
+            # VaR (loss) = -(mu_h - z_left * sigma_h)
+            var_loss = max(0.0, -(mu_h - self._z_left * sigma_h))
+            z = self._z_left
+            phi_z = norm.pdf(z)
+            tail_prob = 1.0 - self.confidence_level
+            es_loss = max(0.0, -mu_h + sigma_h * (phi_z / tail_prob))
+
+        s = float(scale) if scale is not None else 1.0
+        return {"var": var_loss * s, "cvar": es_loss * s, "confidence_level": self.confidence_level}
+
+    # Monte Carlo on underlying price (vectorized)
+
+    @_timeit
     def monte_carlo_var(
         self,
         initial_price: float,
         mu: float,
         sigma: float,
-        portfolio_value: float,
         num_simulations: int = 10000,
+        scale: Optional[float] = None,
         use_log_returns: bool = True,
-        binomial_pricer: Optional[BinomialTree] = None
-    ) -> Dict[str, float]:
+        seed: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
-        Calculate VaR using Monte Carlo simulation
-        
-        Parameters:
-        initial_price : float
-            Current price of the asset
-        mu : float
-            Expected return (annualized)
-        sigma : float
-            Volatility (annualized)
-        portfolio_value : float
-            Total portfolio value
-        num_simulations : int
-            Number of simulation paths
-        use_log_returns : bool
-            Use log returns (log-normal) instead of simple returns
-        binomial_pricer : BinomialTree
-            Option pricer for path-dependent instruments
-            
-        Returns:
-        dict with VaR and CVaR metrics
+        Monte Carlo VaR by simulating terminal underlying and computing PnL per unit notional.
+
+        Returns positive losses scaled by `scale` if provided.
         """
-        self._validate_inputs(portfolio_value)
-        
+        if initial_price <= 0:
+            raise InputValidationError("initial_price must be positive")
         if sigma <= 0:
-            raise InputValidationError("Volatility must be positive")
-        if num_simulations < 1000:
-            warnings.warn("Fewer than 1000 simulations may reduce accuracy")
+            raise InputValidationError("sigma must be positive")
+        if num_simulations <= 0:
+            raise InputValidationError("num_simulations must be > 0")
 
-        # Generate simulated returns
+        rng = np.random.default_rng(seed)
+        mu_h = mu * self.horizon_frac
+        sigma_h = sigma * math.sqrt(self.horizon_frac)
+
         if use_log_returns:
-            simulated_returns = np.random.normal(
-                loc=mu * self.scaling_factor,
-                scale=sigma * np.sqrt(self.scaling_factor),
-                size=num_simulations
-            )
-            
-            # Calculate final prices and losses
-            final_prices = initial_price * np.exp(simulated_returns)
-            losses = initial_price - final_prices
+            sim_r = rng.normal(loc=mu_h, scale=sigma_h, size=num_simulations)
+            final_prices = initial_price * np.exp(sim_r)
+            pnl = final_prices - initial_price  # profit per unit notional
         else:
-            simulated_returns = np.random.normal(
-                loc=mu * self.scaling_factor,
-                scale=sigma * np.sqrt(self.scaling_factor),
-                size=num_simulations
-            )
-            losses = -simulated_returns * portfolio_value
+            sim_r = rng.normal(loc=mu_h, scale=sigma_h, size=num_simulations)
+            pnl = initial_price * sim_r
 
-        # Calculate VaR and CVaR
-        sorted_losses = np.sort(losses)
-        index = int(np.floor((1 - self.confidence_level) * num_simulations))
-        var = sorted_losses[index]
-        cvar = self._calculate_cvar(sorted_losses)
+        var_loss, es_loss = self._empirical_var_es_from_pnl(pnl, self.confidence_level)
+        s = float(scale) if scale is not None else 1.0
+        return {"var": var_loss * s, "cvar": es_loss * s, "n_sims": num_simulations, "confidence_level": self.confidence_level}
 
-        return {
-            'var': var,
-            'cvar': cvar,
-            'confidence_level': self.confidence_level,
-            'time_horizon_days': self.time_horizon_days
-        }
+    # Portfolio delta-normal VaR (multi-asset)
 
-    def parametric_var(
-        self,
-        initial_price: float,
-        mu: float,
-        sigma: float,
-        portfolio_value: float,
-        use_log_returns: bool = True
-    ) -> Dict[str, float]:
-        """
-        Calculate parametric VaR assuming normal/log-normal distribution
-        
-        Parameters:
-        initial_price : float
-            Current price of the asset
-        mu : float
-            Expected return (annualized)
-        sigma : float
-            Volatility (annualized)
-        portfolio_value : float
-            Total portfolio value
-        use_log_returns : bool
-            Use log returns (log-normal) instead of simple returns
-            
-        Returns:
-        dict with VaR and CVaR metrics
-        """
-        self._validate_inputs(portfolio_value)
-        
-        if sigma <= 0:
-            raise InputValidationError("Volatility must be positive")
-
-        # Calculate VaR and CVaR
-        if use_log_returns:
-            # Log-normal distribution (Geometric Brownian Motion)
-            mu_t = mu * self.scaling_factor
-            sigma_t = sigma * np.sqrt(self.scaling_factor)
-            
-            # Log price distribution
-            log_price = np.log(initial_price)
-            log_var = log_price + mu_t - self.z_score * sigma_t
-            var = np.exp(log_var) - initial_price
-            cvar = self._calculate_log_cvar(log_price, mu_t, sigma_t)
-        else:
-            # Normal distribution
-            mu_t = mu * self.scaling_factor
-            sigma_t = sigma * np.sqrt(self.scaling_factor)
-            var = -(mu_t - self.z_score * sigma_t) * initial_price
-            cvar = -(mu_t - (norm.pdf(self.z_score) / (1 - self.confidence_level)) * sigma_t) * initial_price
-
-        return {
-            'var': var * portfolio_value / initial_price,
-            'cvar': cvar * portfolio_value / initial_price,
-            'confidence_level': self.confidence_level,
-            'time_horizon_days': self.time_horizon_days
-        }
-
-    def _calculate_log_cvar(self, log_price: float, mu_t: float, sigma_t: float) -> float:
-        """CVaR calculation for log-normal distribution"""
-        z = norm.ppf(1 - self.confidence_level)
-        exp_mu = np.exp(mu_t - 0.5 * sigma_t**2)
-        exp_sigma = np.exp(-sigma_t**2/2)
-        cvar = -exp_mu * exp_sigma * norm.pdf(z) / (1 - self.confidence_level)
-        return cvar
-
+    @_timeit
     def portfolio_var(
         self,
         weights: List[float],
         expected_returns: List[float],
         cov_matrix: np.ndarray,
-        portfolio_value: float
-    ) -> Dict[str, float]:
-        """
-        Calculate VaR for a multi-asset portfolio
-        
-        Parameters:
-        weights : list of float
-            Portfolio weights (sum to 1)
-        expected_returns : list of float
-            Annualized expected returns
-        cov_matrix : np.ndarray
-            Covariance matrix of returns
-        portfolio_value : float
-            Total portfolio value
-            
-        Returns:
-        dict with VaR and CVaR metrics
-        """
-        self._validate_inputs(portfolio_value)
-        
-        if abs(sum(weights) - 1.0) > 1e-8:
-            raise InputValidationError("Portfolio weights must sum to 1")
-        if len(weights) != len(expected_returns):
-            raise InputValidationError("Weights and returns arrays must match")
-        if cov_matrix.shape[0] != len(weights):
-            raise InputValidationError("Covariance matrix dimensions must match number of assets")
-
-        # Portfolio parameters
-        portfolio_return = np.dot(weights, expected_returns)
-        portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-
-        # Annualized to daily/horizon conversion
-        sigma_t = portfolio_volatility * np.sqrt(self.scaling_factor)
-        mu_t = portfolio_return * self.scaling_factor
-
-        # Calculate VaR and CVaR
-        var = -(mu_t - self.z_score * sigma_t) * portfolio_value
-        cvar = -(mu_t - (norm.pdf(self.z_score) / (1 - self.confidence_level)) * sigma_t) * portfolio_value
-
-        return {
-            'var': var,
-            'cvar': cvar,
-            'confidence_level': self.confidence_level,
-            'time_horizon_days': self.time_horizon_days
-        }
-
-    def stress_test_var(
-        self,
-        initial_price: float,
-        mu: float,
-        sigma: float,
         portfolio_value: float,
-        stress_factors: List[float] = [1.5, 2.0, 2.5]
-    ) -> pd.DataFrame:
+    ) -> Dict[str, Any]:
         """
-        Calculate stress test VaR with extreme scenarios
-        
-        Parameters:
-        initial_price : float
-            Current price of the asset
-        mu : float
-            Expected return (annualized)
-        sigma : float
-            Volatility (annualized)
-        portfolio_value : float
-            Total portfolio value
-        stress_factors : list of float
-            Number of standard deviations for stress scenarios
-            
-        Returns:
-        DataFrame with stress test VaR metrics
+        Delta-normal portfolio VaR (normal returns assumption).
+
+        weights: array-like of weights (same order as expected_returns and cov_matrix rows).
+        expected_returns: annualized returns (same order).
+        cov_matrix: annualized covariance matrix.
+        portfolio_value: scale to convert relative to monetary units.
         """
-        self._validate_inputs(portfolio_value)
-        
-        if sigma <= 0:
-            raise InputValidationError("Volatility must be positive")
-        if any(sf <= 0 for sf in stress_factors):
-            raise InputValidationError("Stress factors must be positive")
+        if portfolio_value <= 0:
+            raise InputValidationError("portfolio_value must be positive")
 
-        results = []
-        for factor in stress_factors:
-            # Stress scenario return
-            stress_return = mu * self.scaling_factor - factor * sigma * np.sqrt(self.scaling_factor)
-            stress_loss = -stress_return * initial_price
-            
-            results.append({
-                'stress_factor': factor,
-                'var': stress_loss * portfolio_value,
-                'confidence_level': self.confidence_level,
-                'time_horizon_days': self.time_horizon_days
-            })
+        w = np.asarray(weights, dtype=float)
+        mu = np.asarray(expected_returns, dtype=float)
+        cov = np.asarray(cov_matrix, dtype=float)
 
-        return pd.DataFrame(results).set_index('stress_factor')
+        if w.ndim != 1 or mu.ndim != 1:
+            raise InputValidationError("weights and expected_returns must be 1-D arrays")
+        if w.shape[0] != mu.shape[0] or cov.shape[0] != w.shape[0] or cov.shape[1] != w.shape[0]:
+            raise InputValidationError("dimension mismatch among weights, returns and covariance matrix")
 
-    def delta_normal_var(
-        self,
-        delta: float,
-        gamma: float,
-        sigma: float,
-        portfolio_value: float
-    ) -> Dict[str, float]:
-        """
-        Delta-normal VaR approximation for options portfolios
-        
-        Parameters:
-        delta : float
-            Option delta (price sensitivity)
-        gamma : float
-            Option gamma (convexity)
-        sigma : float
-            Underlying volatility (annualized)
-        portfolio_value : float
-            Total portfolio value
-            
-        Returns:
-        dict with VaR and CVaR metrics
-        """
-        self._validate_inputs(portfolio_value)
-        
-        if sigma <= 0:
-            raise InputValidationError("Volatility must be positive")
+        mu_h = float(w @ mu) * self.horizon_frac
+        sigma_port = math.sqrt(float(w.T @ cov @ w)) * math.sqrt(self.horizon_frac)
 
-        # Delta-normal approximation
-        sigma_t = sigma * np.sqrt(self.scaling_factor)
-        var = -delta * sigma_t * self.z_score * portfolio_value
-        
-        # Delta-gamma correction (optional)
-        gamma_correction = 0.5 * gamma * sigma_t**2 * portfolio_value
-        var += gamma_correction
-        
-        return {
-            'var': var,
-            'confidence_level': self.confidence_level,
-            'time_horizon_days': self.time_horizon_days
-        }
+        var_loss = max(0.0, -(mu_h - self._z_left * sigma_port))
+        z = self._z_left
+        phi_z = norm.pdf(z)
+        tail_prob = 1.0 - self.confidence_level
+        es_loss = max(0.0, -mu_h + sigma_port * (phi_z / tail_prob))
 
+        return {"var": var_loss * portfolio_value, "cvar": es_loss * portfolio_value, "confidence_level": self.confidence_level}
+
+    # Option-aware VaR (vectorized pricer recommended)
+
+    @_timeit
     def option_var(
         self,
         S: float,
-        K: float,
-        T: float,
-        r: float,
-        sigma: float,
-        option_type: str,
-        q: float = 0.0,
+        pricer_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
+        pricer_params: Dict[str, Any],
         num_simulations: int = 10000,
-        num_steps: int = 500
-    ) -> Dict[str, float]:
+        scale: Optional[float] = None,
+        seed: Optional[int] = None,
+        vectorized: bool = True,
+    ) -> Dict[str, Any]:
         """
-        VaR calculation for options using Monte Carlo
-        
-        Parameters:
-        S : float
-            Spot price
-        K : float
-            Strike price
-        T : float
-            Time to maturity
-        r : float
-            Risk-free rate
-        sigma : float
-            Volatility
-        option_type : str
-            Option type ('call' or 'put')
-        q : float
-            Dividend yield
-        num_simulations : int
-            Number of simulations
-        num_steps : int
-            Steps for binomial pricing
-            
-        Returns:
-        dict with VaR and CVaR metrics
+        Compute VaR by simulating terminal underlying prices and pricing option(s).
+        pricer_fn should accept (prices: np.ndarray, pricer_params: dict) and return np.ndarray of option prices
+        for each input price. If pricer_fn is not vectorized (i.e., expects a scalar price), set vectorized=False
+        and the function will fall back to a Python loop (slower).
+        pricer_params should include keys like K, T, r, sigma, option_type, etc., used by your pricer.
         """
-        if T <= 0:
-            raise InputValidationError("Time to maturity must be positive")
-        if option_type not in ['call', 'put']:
-            raise InputValidationError("Option type must be 'call' or 'put'")
+        if S <= 0:
+            raise InputValidationError("S (spot) must be positive")
+        if num_simulations <= 0:
+            raise InputValidationError("num_simulations must be >= 1")
+        if not callable(pricer_fn):
+            raise InputValidationError("pricer_fn must be callable")
 
-        # Initialize binomial pricer
-        pricer = BinomialTree(num_steps=num_steps)
-        simulated_prices = []
+        rng = np.random.default_rng(seed)
+        sigma = float(pricer_params.get("sigma", 0.2))
+        mu = float(pricer_params.get("r", 0.0))
+        sigma_h = sigma * math.sqrt(self.horizon_frac)
+        mu_h = mu * self.horizon_frac
 
-        # Simulate underlying price paths
-        np.random.seed(42)
-        simulated_returns = np.random.normal(
-            loc=r * self.scaling_factor,
-            scale=sigma * np.sqrt(self.scaling_factor),
-            size=num_simulations
-        )
-        
-        # Price options under simulated prices
-        for ret in simulated_returns:
-            final_price = S * np.exp(ret)
-            price = pricer.price(final_price, K, T, r, sigma, option_type, q=q)
-            simulated_prices.append(price)
+        sim_r = rng.normal(loc=mu_h, scale=sigma_h, size=num_simulations)
+        final_prices = S * np.exp(sim_r)
 
-        # Calculate losses and VaR
-        sorted_losses = np.sort(simulated_prices)
-        index = int(np.floor((1 - self.confidence_level) * num_simulations))
-        
-        var = sorted_losses[index]
-        cvar = self._calculate_cvar(simulated_prices)
+        # Price the option at S (baseline)
+        try:
+            baseline_price = pricer_fn(np.array([S]), pricer_params)[0]
+        except Exception:
+            # If pricer expects scalar signature, try single-call
+            baseline_price = float(pricer_fn(S, pricer_params))
 
-        return {
-            'var': var,
-            'cvar': cvar,
-            'confidence_level': self.confidence_level,
-            'time_horizon_days': self.time_horizon_days
-        }
+        # Vectorized path
+        if vectorized:
+            try:
+                sim_prices = pricer_fn(final_prices, pricer_params)
+                pnl = sim_prices - baseline_price  # PnL per unit notional
+            except Exception:
+                logger.warning("pricer_fn vectorized call failed; falling back to Python loop", exc_info=True)
+                vectorized = False
 
+        if not vectorized:
+            # Fallback loop (slow)
+            pnls = []
+            for p in final_prices:
+                price = pricer_fn(p, pricer_params)
+                pnls.append(float(price) - float(baseline_price))
+            pnl = np.asarray(pnls, dtype=float)
+
+        var_loss, es_loss = self._empirical_var_es_from_pnl(pnl, self.confidence_level)
+        s = float(scale) if scale is not None else 1.0
+        return {"var": var_loss * s, "cvar": es_loss * s, "n_sims": num_simulations, "confidence_level": self.confidence_level}
+
+    # Stress test helpers
+
+    @_timeit
+    def stress_test_var_from_returns(self, pnl_series: Iterable[float], shift: float, scale: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Simple stress test by adding a constant shift to the PnL series (e.g., shift = -0.1 for -10%).
+        Returns VaR/ES computed on shocked series.
+        """
+        arr = _as_array(pnl_series)
+        shocked = arr + float(shift)
+        var_loss, es_loss = self._empirical_var_es_from_pnl(shocked, self.confidence_level)
+        s = float(scale) if scale is not None else 1.0
+        return {"var": var_loss * s, "cvar": es_loss * s, "confidence_level": self.confidence_level}
+
+    @_timeit
     def batch_stress_test(
         self,
-        initial_price: float,
-        mu_range: List[float],
-        sigma_range: List[float],
-        portfolio_value: float
+        pnl_series: Iterable[float],
+        shifts: Iterable[float],
+        scale: Optional[float] = None,
     ) -> pd.DataFrame:
         """
-        Batch stress test with parameter grids
-        
-        Parameters:
-        initial_price : float
-            Current price of the asset
-        mu_range : list of float
-            Expected return scenarios
-        sigma_range : list of float
-            Volatility scenarios
-        portfolio_value : float
-            
-        Returns:
-        DataFrame with VaR scenarios
+        Run multiple additive stress shifts and return a DataFrame indexed by shift value
+        with columns var and cvar (monetary units if scale given).
         """
-        self._validate_inputs(portfolio_value)
-        
-        results = []
-        for mu in mu_range:
-            for sigma in sigma_range:
-                # Calculate stress VaR
-                stress_return = mu * self.scaling_factor - 2.0 * sigma * np.sqrt(self.scaling_factor)
-                stress_loss = -stress_return * initial_price
-                
-                results.append({
-                    'mu': mu,
-                    'sigma': sigma,
-                    'var': stress_loss * portfolio_value,
-                    'confidence_level': self.confidence_level,
-                    'time_horizon_days': self.time_horizon_days
-                })
-
-        return pd.DataFrame(results).pivot(index='mu', columns='sigma', values='var')
+        arr = _as_array(pnl_series)
+        rows = []
+        for shift in shifts:
+            shocked = arr + float(shift)
+            var_loss, es_loss = self._empirical_var_es_from_pnl(shocked, self.confidence_level)
+            rows.append({"shift": shift, "var": var_loss * (scale or 1.0), "cvar": es_loss * (scale or 1.0)})
+        return pd.DataFrame(rows).set_index("shift")
