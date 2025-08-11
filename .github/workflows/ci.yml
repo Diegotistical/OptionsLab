@@ -7,33 +7,40 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
 
+    - name: Clean any existing .egg-info directories
+      run: |
+        find . -name "*.egg-info" -exec rm -rf {} +
+
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
         python-version: 3.11
 
-    - name: Install dependencies
+    - name: Upgrade pip, setuptools, wheel
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
+
+    - name: Install editable package with compatibility flags
+      run: |
+        pip install -e . --use-pep517 --config-settings editable_mode=compat
+
+    - name: Install test dependencies
+      run: |
         pip install -r requirements.txt
 
-    - name: Install package in editable mode
-      run: pip install -e .
-
-    - name: Run tests with pytest and generate coverage XML
+    - name: Run tests with pytest
       run: |
-        pytest tests --maxfail=1 --disable-warnings -q --cov=src --cov-report=xml
+        pytest tests --maxfail=1 --disable-warnings -q --cov=src
 
-    - name: Upload coverage report artifact
+    - name: Upload coverage report
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
         path: coverage.xml
-
