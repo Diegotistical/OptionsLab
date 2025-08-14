@@ -1,3 +1,5 @@
+# src / pricing_models / binomial_tree.py
+
 import numpy as np
 from typing import Literal, Optional, Tuple, Callable
 from numba import njit, types
@@ -170,6 +172,26 @@ class BinomialTree:
         exercise_style: Literal["european", "american"] = "european",
         q: float = 0.0
     ) -> float:
+        """
+        Compute the option price using the CRR binomial tree.
+
+        Args:
+            S: Spot price
+            K: Strike price
+            T: Time to maturity in years
+            r: Risk-free rate
+            sigma: Volatility
+            option_type: 'call' or 'put'
+            exercise_style: 'european' or 'american' (default: 'european')
+            q: Dividend yield (default: 0.0)
+
+        Returns:
+            Option price as float
+
+        Raises:
+            InputValidationError: If inputs are invalid
+            BinomialTreeError: For unexpected computation errors
+        """
         if T == 0:
             return max(S-K, 0.0) if option_type == "call" else max(K-S, 0.0)
             
@@ -179,17 +201,14 @@ class BinomialTree:
             intrinsic = max(fwd - K, 0.0) if option_type == "call" else max(K - fwd, 0.0)
             return intrinsic * df
         
-        ot, es = self._validate_inputs(
-            S, K, T, r, sigma, option_type, exercise_style, q
-        )
+        ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
         u, d, p, dt = self._compute_params(S, K, T, r, sigma, q)
         
         asset_prices = _compute_asset_prices(S, u, d, self.num_steps)
-        option_values = _backward_induction(
-            asset_prices, K, r, dt, p, ot, es
-        )
+        option_values = _backward_induction(asset_prices, K, r, dt, p, ot, es)
         
         return option_values[0, 0]
+
 
     @error_handler
     def delta(
