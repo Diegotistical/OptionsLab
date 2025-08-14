@@ -4,6 +4,7 @@ import numpy as np
 from scipy.stats import norm
 from typing import Literal
 
+
 def black_scholes(
     S: float,
     K: float,
