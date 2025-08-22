@@ -3,6 +3,8 @@
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/github/license/Diegotistical/OptionsLab)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/Diegotistical/OptionsLab)](https://github.com/Diegotistical/quant-options-toolkit/commits/main)
+[![Streamlit](https://img.shields.io/badge/Open%20in%20Streamlit-App-red?logo=streamlit&logoColor=white)](https://optionslab.streamlit.app/)
+
 
 **Options Lab** is a Python library for quantitative finance practitioners, researchers, and students. It provides models, simulations, and risk analysis tools for pricing and analyzing options and derivatives portfolios.
 
@@ -204,6 +206,7 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
 
