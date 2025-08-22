@@ -44,7 +44,7 @@ class MonteCarloError(Exception):
 
 
 # Monte Carlo Pricer
-class MonteCarloPricer:
+class MonteCarloPricerUni:
     """
     High-performance Monte Carlo pricer for European options with Greeks.
 
@@ -147,7 +147,7 @@ class MLSurrogate:
         self.model = None
         self.trained = False
 
-    def fit(self, df: pd.DataFrame, pricer: MonteCarloPricer):
+    def fit(self, df: pd.DataFrame, pricer: MonteCarloPricerUni):
         """
         Fit surrogate using Monte Carlo pricer outputs.
         df: must contain ['S','K','T','r','sigma','q']
@@ -190,8 +190,8 @@ if __name__ == "__main__":
     S, K, T, r, sigma, q = 100.0, 100.0, 1.0, 0.05, 0.2, 0.0
 
     # Initialize pricers
-    mc_pricer_cpu = MonteCarloPricer(num_simulations=50_000, use_numba=True, use_gpu=False)
-    mc_pricer_gpu = MonteCarloPricer(num_simulations=50_000, use_numba=True, use_gpu=True)
+    mc_pricer_cpu = MonteCarloPricerUni(num_simulations=50_000, use_numba=True, use_gpu=False)
+    mc_pricer_gpu = MonteCarloPricerUni(num_simulations=50_000, use_numba=True, use_gpu=True)
 
     # Benchmark CPU Monte Carlo
     start = time.perf_counter()

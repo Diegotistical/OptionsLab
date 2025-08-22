@@ -3,9 +3,17 @@ OptionsLab – Streamlit Frontend
 Entry point that sets global page config, loads shared sidebar, and
 delegates to Streamlit's multi-page app (files in streamlit_app/pages).
 """
+import sys
+from pathlib import Path
+
+# Make sure 'src' is importable as a package (useful on Streamlit Cloud)
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if SRC.exists():
+    sys.path.insert(0, str(SRC))
 
 import streamlit as st
-from utils import show_repo_status, load_readme
+from .utils import show_repo_status, load_readme
 
 st.set_page_config(
     page_title="Options Lab",
@@ -25,7 +33,6 @@ with st.sidebar:
     st.info("Use the left “Pages” to navigate: Pricing, Risk Analysis, Vol Surface, Benchmarks.")
     st.markdown("—")
 
-# Lightweight landing content
 col1, col2 = st.columns([1,1])
 with col1:
     st.subheader("What’s inside?")
@@ -47,4 +54,3 @@ with col2:
 st.markdown("---")
 st.subheader("README (excerpt)")
 st.markdown(load_readme(max_lines=40))
-
