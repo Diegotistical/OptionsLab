@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from utils import get_mc_pricer, get_mc_ml_surrogate, timeit_ms
+from streamlit_app.st_utils import get_mc_pricer, get_mc_ml_surrogate, timeit_ms
 
 st.set_page_config(page_title="MC – ML Surrogate", page_icon="🤖", layout="wide")
 st.title("Monte Carlo — ML Surrogate (Gradient Boosting)")

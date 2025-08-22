@@ -5,7 +5,7 @@ Quick micro-benchmarks across models for a single parameter set.
 
 import streamlit as st
 import pandas as pd
-from utils import (
+from streamlit_app.st_utils import (
     timeit_ms,
     price_black_scholes, price_binomial, price_monte_carlo
 )

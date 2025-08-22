@@ -13,7 +13,7 @@ if SRC.exists():
     sys.path.insert(0, str(SRC))
 
 import streamlit as st
-from .utils import show_repo_status, load_readme
+from st_utils import show_repo_status, load_readme
 
 st.set_page_config(
     page_title="Options Lab",

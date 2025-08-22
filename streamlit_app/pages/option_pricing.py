@@ -8,7 +8,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 
-from utils import (
+from streamlit_app.st_utils import (
     price_black_scholes, price_binomial, price_monte_carlo,
     greeks_mc_delta_gamma, timeit_ms
 )
