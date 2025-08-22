@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D 
 
-from utils import get_mc_unified_pricer, timeit_ms
+from streamlit_app.st_utils import get_mc_unified_pricer, timeit_ms
 
 st.set_page_config(page_title="MC – Unified (CPU/GPU)", page_icon="🚀", layout="wide")
 st.title("Monte Carlo — Unified (CPU/GPU + Antithetic)")

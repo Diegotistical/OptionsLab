@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from utils import compute_var_es
+from streamlit_app.st_utils import compute_var_es
 
 st.set_page_config(page_title="Risk Analysis", page_icon="🛡️", layout="wide")
 st.title("🛡️ Risk Analysis")

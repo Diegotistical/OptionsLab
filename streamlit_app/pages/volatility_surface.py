@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
 
-from utils import build_surface, check_butterfly_arbitrage
+from streamlit_app.st_utils import build_surface, check_butterfly_arbitrage
 
 st.set_page_config(page_title="Volatility Surface", page_icon="🗺️", layout="wide")
 st.title("🗺️ Volatility Surface")

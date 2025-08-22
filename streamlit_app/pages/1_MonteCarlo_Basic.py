@@ -1,8 +1,11 @@
+# 1_MonteCarlo_Basic.py
+
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-from utils import get_mc_pricer, timeit_ms
+from streamlit_app.st_utils import price_monte_carlo, timeit_ms
+
 
 st.set_page_config(page_title="MC – Basic", page_icon="⛳", layout="wide")
 st.title("Monte Carlo Pricer — Basic")
@@ -32,7 +35,7 @@ with col2:
     st.markdown("### Results")
 
 if run:
-    pricer = get_mc_pricer(num_sim, num_steps, seed, use_numba=use_numba)
+    pricer = price_monte_carlo(num_sim, num_steps, seed, use_numba=use_numba)
 
     # Price + Greeks (Δ, Γ via finite differences)
     (price, t_price_ms) = timeit_ms(pricer.price, S, K, T, r, sigma, option_type, q)

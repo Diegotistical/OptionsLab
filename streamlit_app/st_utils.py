@@ -1,9 +1,5 @@
+# streamlit_app/st_utils.py
 from __future__ import annotations
-
-"""
-Shared utilities for the Streamlit UI: safe wrappers, caching, plotting,
-and thin adapters to `src` modules.
-"""
 
 import sys
 from pathlib import Path
@@ -15,17 +11,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-# --- Make sure 'src' is importable whether you run locally or on Streamlit Cloud
-ROOT = Path(__file__).resolve().parents[1]   # project root
+# --- Make repo root and src importable (works locally and on Streamlit Cloud)
+ROOT = Path(__file__).resolve().parents[1]     # project root
 SRC = ROOT / "src"
-if SRC.exists():
-    # Put 'src' at the *front* so 'src.utils' wins over 'streamlit_app/*'
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-# --- Import decorators from your repo (now that 'src' is on sys.path)
-from utils.decorators.caching import cached_resource, cached_data
-
-# --- Try importing your repo modules (be tolerant to missing pieces)
+# --- Import from your src packages (tolerant of absence)
 try:
     from pricing_models.black_scholes import black_scholes as bs_price  # type: ignore
 except Exception:
@@ -67,31 +61,33 @@ except Exception:
     VolatilitySurfaceGenerator = None
 
 try:
-    from volatility_surface.utils.arbitrage_utils import check_arbitrage_violations as check_butterfly_arbitrage
+    from volatility_surface.utils.arbitrage_utils import check_butterfly_arbitrage
 except Exception:
     check_butterfly_arbitrage = None
 
 
-# ---------- Cache Helpers (use your decorators, not monkey-patching Streamlit) ----------
-@cached_resource(show_spinner=False)
+# ---------- Cache Helpers ----------
+@st.cache_resource(show_spinner=False)
 def get_binomial_tree(n_steps: int = 500):
     if BinomialTree is None:
         raise RuntimeError("BinomialTree not found. Check src/pricing_models/binomial_tree.py")
     return BinomialTree(num_steps=n_steps)
 
-@cached_resource(show_spinner=False)
-def get_mc_pricer(num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42, use_numba: bool = False):
+@st.cache_resource(show_spinner=False)
+def get_mc_pricer(
+    num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42, use_numba: bool = False
+):
     if MonteCarloPricer is None:
         raise RuntimeError("MonteCarloPricer not found. Check src/pricing_models/monte_carlo.py")
     return MonteCarloPricer(num_simulations=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba)
 
-@cached_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def get_mc_ml_surrogate(num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42):
     if MonteCarloML is None:
         raise RuntimeError("MonteCarloML not found. Check src/pricing_models/monte_carlo_ml.py")
     return MonteCarloML(num_simulations=num_sim, num_steps=num_steps, seed=seed)
 
-@cached_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def get_mc_unified_pricer(
     num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42,
     use_numba: bool = True, use_gpu: bool = False
@@ -102,12 +98,13 @@ def get_mc_unified_pricer(
         num_simulations=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba, use_gpu=use_gpu
     )
 
-@cached_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def load_readme(max_lines: int = 80) -> str:
     path = ROOT / "README.md"
     if not path.exists():
         return "_README.md not found_"
     return "".join(path.read_text(encoding="utf-8").splitlines(True)[:max_lines])
+
 
 # ---------- Sidebar Status ----------
 def show_repo_status() -> None:
@@ -125,9 +122,10 @@ def show_repo_status() -> None:
 
 
 # ---------- Pricing Wrappers ----------
-def price_black_scholes(S: float, K: float, T: float, r: float, sigma: float,
-                        option_type: Literal["call", "put"], q: float = 0.0) -> float:
-    """Thin wrapper that tries common signatures for your BS implementation."""
+def price_black_scholes(
+    S: float, K: float, T: float, r: float, sigma: float,
+    option_type: Literal["call", "put"], q: float = 0.0
+) -> float:
     if bs_price is None:
         raise RuntimeError("Black–Scholes price function not found.")
     try:
@@ -143,23 +141,28 @@ def price_black_scholes(S: float, K: float, T: float, r: float, sigma: float,
         except Exception:
             return float(bs_price(S, K, T, r, sigma, is_call=(option_type == "call"), q=q))
 
-def price_binomial(S: float, K: float, T: float, r: float, sigma: float,
-                   option_type: Literal["call", "put"], q: float = 0.0,
-                   n_steps: int = 500, style: Literal["european", "american"] = "european") -> float:
+def price_binomial(
+    S: float, K: float, T: float, r: float, sigma: float,
+    option_type: Literal["call", "put"], q: float = 0.0,
+    n_steps: int = 500, style: Literal["european", "american"] = "european"
+) -> float:
     tree = get_binomial_tree(n_steps)
     return float(tree.price(S, K, T, r, sigma, option_type, style, q))
 
-def price_monte_carlo(S: float, K: float, T: float, r: float, sigma: float,
-                      option_type: Literal["call", "put"], q: float = 0.0,
-                      num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42,
-                      use_numba: bool = False) -> float:
+def price_monte_carlo(
+    S: float, K: float, T: float, r: float, sigma: float,
+    option_type: Literal["call", "put"], q: float = 0.0,
+    num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42, use_numba: bool = False
+) -> float:
     mc = get_mc_pricer(num_sim, num_steps, seed, use_numba=use_numba)
     return float(mc.price(S, K, T, r, sigma, option_type, q))
 
-def greeks_mc_delta_gamma(S: float, K: float, T: float, r: float, sigma: float,
-                          option_type: Literal["call", "put"], q: float = 0.0,
-                          num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42,
-                          h: float = 1e-3, use_numba: bool = False) -> Tuple[float, float]:
+def greeks_mc_delta_gamma(
+    S: float, K: float, T: float, r: float, sigma: float,
+    option_type: Literal["call", "put"], q: float = 0.0,
+    num_sim: int = 50_000, num_steps: int = 100, seed: Optional[int] = 42,
+    h: float = 1e-3, use_numba: bool = False
+) -> Tuple[float, float]:
     mc = get_mc_pricer(num_sim, num_steps, seed, use_numba=use_numba)
     p_down = mc.price(S - h, K, T, r, sigma, option_type, q)
     p_mid  = mc.price(S,     K, T, r, sigma, option_type, q)
@@ -187,9 +190,11 @@ class SurfaceResult:
     maturities: np.ndarray
     iv_grid: np.ndarray
 
-def build_surface(strikes: np.ndarray, maturities: np.ndarray, ivs: np.ndarray,
-                  strike_points: int = 50, maturity_points: int = 50,
-                  method: str = "cubic", extrapolate: bool = False, benchmark: bool = True) -> SurfaceResult:
+def build_surface(
+    strikes: np.ndarray, maturities: np.ndarray, ivs: np.ndarray,
+    strike_points: int = 50, maturity_points: int = 50,
+    method: str = "cubic", extrapolate: bool = False, benchmark: bool = True
+) -> SurfaceResult:
     if VolatilitySurfaceGenerator is None:
         raise RuntimeError("VolatilitySurfaceGenerator not found.")
     gen = VolatilitySurfaceGenerator(
