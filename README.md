@@ -174,10 +174,10 @@ Compute option Greeks:
 - [x] Black-Scholes pricing (European)
 - [x] Monte Carlo engine for European options
 - [x] Greeks calculation (analytical & numerical)
-- [ ] Binomial Tree American options support
+- [x] Binomial Tree American options support
 - [ ] Visualization: payoff diagrams, volatility surfaces
 - [ ] Market data integration (e.g. Yahoo Finance, Alpha Vantage)
-- [ ] Advanced risk metrics (VaR, CVaR)
+- [x] Advanced risk metrics (VaR, CVaR)
 
 ---
 
@@ -206,6 +206,7 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
 
