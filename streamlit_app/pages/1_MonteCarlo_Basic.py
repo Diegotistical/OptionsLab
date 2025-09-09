@@ -1,14 +1,23 @@
-# 1_MonteCarlo_Basic.py
 
-import streamlit as st
-import numpy as np
-import matplotlib.pyplot as plt
 # streamlit_app/pages/1_MonteCarlo_Basic.py
+
+import sys
+from pathlib import Path
+import time
 import streamlit as st
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
-from st_utils import (
+ROOT = Path(__file__).resolve().parents[1]  # project root
+SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if SRC.exists() and str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+
+from streamlit_app.st_utils import (
     price_monte_carlo,
     greeks_mc_delta_gamma,
     timeit_ms,
