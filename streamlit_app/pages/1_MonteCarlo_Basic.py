@@ -3,68 +3,102 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+# streamlit_app/pages/1_MonteCarlo_Basic.py
+import streamlit as st
+import numpy as np
+import pandas as pd
 
-from streamlit_app.st_utils import price_monte_carlo, timeit_ms
+from st_utils import (
+    price_monte_carlo,
+    greeks_mc_delta_gamma,
+    timeit_ms,
+    show_repo_status
+)
 
+# ------------------- PAGE CONFIG -------------------
+st.set_page_config(
+    page_title="Monte Carlo Option Pricing (Basic)",
+    layout="wide"
+)
 
-st.set_page_config(page_title="MC – Basic", page_icon="⛳", layout="wide")
-st.title("Monte Carlo Pricer — Basic")
+# ------------------- HEADER -------------------
+st.title("📈 Monte Carlo Option Pricing (Basic)")
+st.markdown("""
+Use Monte Carlo simulation to price **European call/put options** and compute Greeks.  
+Adjust parameters in the sidebar, then click **Run Monte Carlo Pricing**.
+""")
 
+# ------------------- SIDEBAR INPUTS -------------------
 with st.sidebar:
-    st.markdown("### Simulation Settings")
-    num_sim = st.slider("Simulations", 5_000, 200_000, 50_000, step=5_000)
-    num_steps = st.slider("Time Steps", 10, 500, 100, step=10)
-    seed = st.number_input("Seed", value=42)
-    use_numba = st.toggle("Use Numba (if available)", value=False)
+    st.header("Model Parameters")
 
-col1, col2 = st.columns([1,1], gap="large")
-
-with col1:
-    st.markdown("### Option Inputs")
-    S = st.number_input("Spot (S)", 1.0, 1_000.0, 100.0)
-    K = st.number_input("Strike (K)", 1.0, 1_000.0, 100.0)
-    T = st.number_input("Maturity (T, years)", 0.01, 5.0, 1.0)
-    r = st.number_input("Risk-free (r)", 0.0, 0.25, 0.05)
-    sigma = st.number_input("Volatility (σ)", 0.001, 2.0, 0.2)
-    q = st.number_input("Dividend (q)", 0.0, 0.2, 0.0)
+    # Market Inputs
+    S = st.number_input("Spot Price (S)", min_value=0.0, value=100.0, step=1.0)
+    K = st.number_input("Strike Price (K)", min_value=0.0, value=100.0, step=1.0)
+    T = st.number_input("Time to Maturity (T, years)", min_value=0.01, value=1.0, step=0.01)
+    r = st.number_input("Risk-Free Rate (r)", value=0.05, step=0.01, format="%.4f")
+    sigma = st.number_input("Volatility (σ)", value=0.2, step=0.01, format="%.4f")
+    q = st.number_input("Dividend Yield (q)", value=0.0, step=0.01, format="%.4f")
     option_type = st.selectbox("Option Type", ["call", "put"])
 
-run = st.button("Run Pricing")
+    # Simulation Inputs
+    num_sim = st.number_input("Number of Simulations", min_value=1000, value=50000, step=1000)
+    num_steps = st.number_input("Steps per Path", min_value=1, value=100, step=1)
+    seed = st.number_input("Random Seed", value=42, step=1)
+    use_numba = st.checkbox("Use Numba Acceleration", value=False)
 
-with col2:
-    st.markdown("### Results")
+    # Utility
+    st.markdown("---")
+    show_repo_status()
+    run = st.button("🚀 Run Monte Carlo Pricing")
+
+# ------------------- MAIN CONTENT -------------------
+st.markdown("### Results")
 
 if run:
-    pricer = price_monte_carlo(num_sim, num_steps, seed, use_numba=use_numba)
+    # ---------- Monte Carlo Pricing ----------
+    (price, t_price_ms) = timeit_ms(
+        price_monte_carlo,
+        S, K, T, r, sigma, option_type, q,
+        num_sim, num_steps, seed, use_numba
+    )
 
-    # Price + Greeks (Δ, Γ via finite differences)
-    (price, t_price_ms) = timeit_ms(pricer.price, S, K, T, r, sigma, option_type, q)
-    # Greeks using same MonteCarloPricer instance
-    def greeks_delta_gamma():
-        h = max(S * 1e-4, 1e-4)
-        p_dn = pricer.price(S - h, K, T, r, sigma, option_type, q)
-        p_mid = price
-        p_up = pricer.price(S + h, K, T, r, sigma, option_type, q)
-        delta = (p_up - p_dn) / (2*h)
-        gamma = (p_up - 2*p_mid + p_dn) / (h*h)
-        return delta, gamma
+    # ---------- Greeks ----------
+    delta, gamma = greeks_mc_delta_gamma(
+        S, K, T, r, sigma, option_type, q,
+        num_sim, num_steps, seed, 1e-3, use_numba
+    )
 
-    (dg, t_greeks_ms) = timeit_ms(greeks_delta_gamma)
-    delta, gamma = dg
+    # ---------- Display ----------
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Option Price", f"{price:.4f}")
+    col2.metric("Delta", f"{delta:.4f}")
+    col3.metric("Gamma", f"{gamma:.4f}")
 
-    st.success(f"**Price** = {price:.6f}")
-    st.write(f"Δ = {delta:.6f} | Γ = {gamma:.6f}")
-    st.caption(f"Timing — price: {t_price_ms:.2f} ms | Δ,Γ: {t_greeks_ms:.2f} ms")
+    st.caption(f"Pricing computed in {t_price_ms:.2f} ms using Monte Carlo with {num_sim:,} paths and {num_steps} steps.")
 
-    # Terminal distribution plot
-    with st.expander("Show terminal price distribution"):
-        # Access private method intentionally for demo
-        terminal = pricer._simulate_terminal_prices(S, T, r, sigma, q)  # noqa: SLF001
-        fig, ax = plt.subplots()
-        ax.hist(terminal, bins=60, alpha=0.65, edgecolor="black")
-        ax.axvline(K, color="red", linestyle="--", label="Strike")
-        ax.set_title("Terminal Price Distribution")
-        ax.set_xlabel("Terminal Price")
-        ax.set_ylabel("Frequency")
-        ax.legend()
-        st.pyplot(fig, clear_figure=True)
+    # ---------- Confidence Interval ----------
+    np.random.seed(seed)
+    z = np.random.standard_normal((num_sim, num_steps))
+    dt = T / num_steps
+    S_paths = np.zeros_like(z)
+    S_paths[:, 0] = S
+    for t in range(1, num_steps):
+        S_paths[:, t] = S_paths[:, t - 1] * np.exp((r - 0.5 * sigma**2)*dt + sigma*np.sqrt(dt)*z[:, t])
+    payoff = np.maximum(S_paths[:, -1] - K, 0) if option_type == "call" else np.maximum(K - S_paths[:, -1], 0)
+    discounted = np.exp(-r*T) * payoff
+    mean_price = np.mean(discounted)
+    std_error = np.std(discounted) / np.sqrt(num_sim)
+    ci_lower = mean_price - 1.96 * std_error
+    ci_upper = mean_price + 1.96 * std_error
+
+    st.markdown(f"**95% Confidence Interval:** {ci_lower:.4f} - {ci_upper:.4f}")
+
+    # ---------- Histogram ----------
+    st.markdown("#### Payoff Distribution")
+    hist_df = pd.DataFrame({"Discounted Payoff": discounted})
+    st.bar_chart(hist_df, y="Discounted Payoff", use_container_width=True)
+
+
+else:
+    st.info("Set parameters in the sidebar and click **Run Monte Carlo Pricing** to see results.")
