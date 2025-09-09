@@ -65,35 +65,41 @@ def simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed):
 
 if run:
     # ---------- Monte Carlo Pricing ----------
-    price_func = price_monte_carlo or (lambda S, K, T, r, sigma, option_type, q=0.0, **kw: np.mean(simulate_payoffs(S, K, T, r, sigma, option_type, **kw)))
+    def price_fallback(S, K, T, r, sigma, option_type, q=0.0, **kw):
+        payoff = simulate_payoffs(S, K, T, r, sigma, option_type, **kw)
+        return float(np.mean(payoff))
+
+    price_func = price_monte_carlo or price_fallback
     price, t_price_ms = timeit_ms(
         price_func,
         S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
         num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba
     )
 
-    # If fallback returned array, compute mean
-    if isinstance(price, np.ndarray):
-        price = np.mean(price)
+    # Make sure price is scalar
+    if isinstance(price, (np.ndarray, list)):
+        price = float(np.mean(price))
 
-     # ---------- Greeks ----------
-    greeks_func = greeks_mc_delta_gamma or (lambda S, K, T, r, sigma, option_type, q=0.0, num_sim=50_000, num_steps=100, seed=42, h=1e-3, use_numba=False: (
-        (np.mean(simulate_payoffs(S+h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed)) - 
-         np.mean(simulate_payoffs(S-h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))) / (2*h),
-        (np.mean(simulate_payoffs(S+h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed)) -
-         2*np.mean(simulate_payoffs(S, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed)) +
-         np.mean(simulate_payoffs(S-h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))) / (h**2)
-    ))
+    # ---------- Greeks ----------
+    def greeks_fallback(S, K, T, r, sigma, option_type, q=0.0, num_sim=50_000, num_steps=100, seed=42, h=1e-3, use_numba=False):
+        base = np.mean(simulate_payoffs(S, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))
+        up = np.mean(simulate_payoffs(S+h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))
+        down = np.mean(simulate_payoffs(S-h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))
+        delta = (up - down) / (2*h)
+        gamma = (up - 2*base + down) / (h**2)
+        return float(delta), float(gamma)
+
+    greeks_func = greeks_mc_delta_gamma or greeks_fallback
     delta, gamma = greeks_func(
         S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
         num_sim=num_sim, num_steps=num_steps, seed=seed, h=1e-3, use_numba=use_numba
     )
 
-    # If fallback returned arrays, compute means
-    if isinstance(delta, np.ndarray):
-        delta = np.mean(delta)
-    if isinstance(gamma, np.ndarray):
-        gamma = np.mean(gamma)
+    # Ensure delta/gamma are scalars
+    if isinstance(delta, (np.ndarray, list)):
+        delta = float(np.mean(delta))
+    if isinstance(gamma, (np.ndarray, list)):
+        gamma = float(np.mean(gamma))
 
     # ---------- Display Metrics ----------
     col1, col2, col3 = st.columns(3)
