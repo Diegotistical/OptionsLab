@@ -63,6 +63,15 @@ def simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed):
     payoff = np.maximum(S_paths[:, -1] - K, 0) if option_type == "call" else np.maximum(K - S_paths[:, -1], 0)
     return np.exp(-r*T) * payoff
 
+def finite_diff_greeks(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, h=1e-3):
+    """Compute delta and gamma via finite differences"""
+    price_0 = np.mean(simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed))
+    price_up = np.mean(simulate_payoffs(S + h, K, T, r, sigma, option_type, num_sim, num_steps, seed))
+    price_down = np.mean(simulate_payoffs(S - h, K, T, r, sigma, option_type, num_sim, num_steps, seed))
+    delta = (price_up - price_down) / (2 * h)
+    gamma = (price_up - 2 * price_0 + price_down) / (h ** 2)
+    return delta, gamma
+
 if run:
     # ---------- Monte Carlo Pricing ----------
     price_func = price_monte_carlo or (lambda *a, **kw: np.mean(simulate_payoffs(*a, **kw)))
@@ -72,10 +81,10 @@ if run:
     )
 
     # ---------- Greeks ----------
-    greeks_func = greeks_mc_delta_gamma or (lambda *a, h=1e-3, **kw: (None, None))
+    greeks_func = greeks_mc_delta_gamma or finite_diff_greeks
     delta, gamma = greeks_func(
-        S, K, T, r, sigma, option_type, q,
-        num_sim=num_sim, num_steps=num_steps, seed=seed, h=1e-3, use_numba=use_numba
+        S, K, T, r, sigma, option_type,
+        num_sim=num_sim, num_steps=num_steps, seed=seed, h=1e-3
     )
 
     # ---------- Display Metrics ----------
