@@ -57,10 +57,10 @@ def _simulate_payoffs_fallback(
     seed: Optional[int] = 42,
     q: float = 0.0,
 ) -> np.ndarray:
-    """Robust loop-based fallback that works on Streamlit Cloud"""
+    """Loop-based fallback that works on BOTH local and Streamlit Cloud"""
     try:
-        # Reset seed properly for reproducibility
-        np.random.seed(seed)
+        # CRITICAL FIX: Use legacy random seed for compatibility
+        np.random.seed(int(seed) if seed is not None else None)
         dt = T / num_steps
         Z = np.random.standard_normal((num_sim, num_steps))
         
@@ -68,7 +68,7 @@ def _simulate_payoffs_fallback(
         S_paths = np.zeros((num_sim, num_steps))
         S_paths[:, 0] = S
         
-        # Generate paths with dividend yield
+        # Generate paths with dividend yield (exact match to page implementation)
         for t in range(1, num_steps):
             S_paths[:, t] = S_paths[:, t-1] * np.exp(
                 (r - q - 0.5 * sigma**2) * dt + 
