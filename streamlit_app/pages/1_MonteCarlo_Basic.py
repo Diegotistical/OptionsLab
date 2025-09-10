@@ -54,25 +54,6 @@ with st.sidebar:
 # ------------------- MAIN CONTENT -------------------
 st.markdown("### Results")
 
-def simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q=0.0):
-    """Fallback Monte Carlo with dividend yield support"""
-    try:
-        np.random.seed(seed)
-        dt = T / num_steps
-        Z = np.random.standard_normal((num_sim, num_steps))
-        S_paths = np.zeros_like(Z)
-        S_paths[:, 0] = S
-        for t in range(1, num_steps):
-            S_paths[:, t] = S_paths[:, t-1] * np.exp(
-                (r - q - 0.5 * sigma**2) * dt + 
-                sigma * np.sqrt(dt) * Z[:, t]
-            )
-        payoff = np.maximum(S_paths[:, -1] - K, 0) if option_type == "call" else np.maximum(K - S_paths[:, -1], 0)
-        return np.exp(-r*T) * payoff
-    except Exception as e:
-        logger.error(f"Payoff simulation failed: {str(e)}")
-        raise
-
 if run:
     try:
         # ---------- Monte Carlo Pricing ----------
@@ -82,21 +63,11 @@ if run:
             num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba
         )
 
-        # Ensure price is scalar
-        if price is not None and not np.isscalar(price):
-            price = float(np.mean(price))
-
         # ---------- Greeks ----------
         delta, gamma = greeks_mc_delta_gamma(
             S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
             num_sim=num_sim, num_steps=num_steps, seed=seed, h=1e-3, use_numba=use_numba
         )
-
-        # Ensure delta/gamma are scalars
-        if delta is not None and not np.isscalar(delta):
-            delta = float(np.mean(delta))
-        if gamma is not None and not np.isscalar(gamma):
-            gamma = float(np.mean(gamma))
 
         # ---------- Display Metrics ----------
         col1, col2, col3 = st.columns(3)
@@ -104,12 +75,11 @@ if run:
         col2.metric("Delta", f"{delta:.4f}" if delta is not None else "N/A")
         col3.metric("Gamma", f"{gamma:.4f}" if gamma is not None else "N/A")
 
-        status = "✅" if price is not None and delta is not None and gamma is not None else "⚠️"
-        st.caption(f"{status} Pricing computed in {t_price_ms:.2f} ms using Monte Carlo with {num_sim:,} paths and {num_steps} steps.")
-
         # ---------- Confidence Interval ----------
         try:
-            discounted = simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q=q)
+            # Use the SAME fallback function as pricing for consistency
+            from streamlit_app.st_utils import _simulate_payoffs_fallback
+            discounted = _simulate_payoffs_fallback(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q)
             mean_price = np.mean(discounted)
             std_error = np.std(discounted) / np.sqrt(num_sim)
             ci_lower = mean_price - 1.96 * std_error
