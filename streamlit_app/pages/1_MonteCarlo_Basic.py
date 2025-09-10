@@ -1,9 +1,9 @@
-# streamlit_app/pages/1_MonteCarlo_Basic.py
 import sys
 from pathlib import Path
 import streamlit as st
 import numpy as np
 import pandas as pd
+import logging  # Added for debugging
 
 from streamlit_app.st_utils import (
     price_monte_carlo,
@@ -11,6 +11,9 @@ from streamlit_app.st_utils import (
     timeit_ms,
     show_repo_status
 )
+
+# Configure logging
+logger = logging.getLogger("monte_carlo")
 
 # ------------------- PAGE CONFIG -------------------
 st.set_page_config(
@@ -51,75 +54,77 @@ with st.sidebar:
 # ------------------- MAIN CONTENT -------------------
 st.markdown("### Results")
 
-def simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed):
-    """Fallback Monte Carlo if pricing module is missing"""
-    np.random.seed(seed)
-    dt = T / num_steps
-    Z = np.random.standard_normal((num_sim, num_steps))
-    S_paths = np.zeros_like(Z)
-    S_paths[:, 0] = S
-    for t in range(1, num_steps):
-        S_paths[:, t] = S_paths[:, t-1] * np.exp((r - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z[:, t])
-    payoff = np.maximum(S_paths[:, -1] - K, 0) if option_type == "call" else np.maximum(K - S_paths[:, -1], 0)
-    return np.exp(-r*T) * payoff
+def simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q=0.0):
+    """Fallback Monte Carlo with dividend yield support"""
+    try:
+        np.random.seed(seed)
+        dt = T / num_steps
+        Z = np.random.standard_normal((num_sim, num_steps))
+        S_paths = np.zeros_like(Z)
+        S_paths[:, 0] = S
+        for t in range(1, num_steps):
+            S_paths[:, t] = S_paths[:, t-1] * np.exp(
+                (r - q - 0.5 * sigma**2) * dt + 
+                sigma * np.sqrt(dt) * Z[:, t]
+            )
+        payoff = np.maximum(S_paths[:, -1] - K, 0) if option_type == "call" else np.maximum(K - S_paths[:, -1], 0)
+        return np.exp(-r*T) * payoff
+    except Exception as e:
+        logger.error(f"Payoff simulation failed: {str(e)}")
+        raise
 
 if run:
-    # ---------- Monte Carlo Pricing ----------
-    def price_fallback(S, K, T, r, sigma, option_type, q=0.0, **kw):
-        payoff = simulate_payoffs(S, K, T, r, sigma, option_type, **kw)
-        return float(np.mean(payoff))
+    try:
+        # ---------- Monte Carlo Pricing ----------
+        price, t_price_ms = timeit_ms(
+            price_monte_carlo,
+            S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
+            num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba
+        )
 
-    price_func = price_monte_carlo or price_fallback
-    price, t_price_ms = timeit_ms(
-        price_func,
-        S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
-        num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba
-    )
+        # Ensure price is scalar
+        if price is not None and not np.isscalar(price):
+            price = float(np.mean(price))
 
-    # Make sure price is scalar
-    if isinstance(price, (np.ndarray, list)):
-        price = float(np.mean(price))
+        # ---------- Greeks ----------
+        delta, gamma = greeks_mc_delta_gamma(
+            S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
+            num_sim=num_sim, num_steps=num_steps, seed=seed, h=1e-3, use_numba=use_numba
+        )
 
-    # ---------- Greeks ----------
-    def greeks_fallback(S, K, T, r, sigma, option_type, q=0.0, num_sim=50_000, num_steps=100, seed=42, h=1e-3, use_numba=False):
-        base = np.mean(simulate_payoffs(S, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))
-        up = np.mean(simulate_payoffs(S+h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))
-        down = np.mean(simulate_payoffs(S-h, K, T, r, sigma, option_type, num_sim=num_sim, num_steps=num_steps, seed=seed))
-        delta = (up - down) / (2*h)
-        gamma = (up - 2*base + down) / (h**2)
-        return float(delta), float(gamma)
+        # Ensure delta/gamma are scalars
+        if delta is not None and not np.isscalar(delta):
+            delta = float(np.mean(delta))
+        if gamma is not None and not np.isscalar(gamma):
+            gamma = float(np.mean(gamma))
 
-    greeks_func = greeks_mc_delta_gamma or greeks_fallback
-    delta, gamma = greeks_func(
-        S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type, q=q,
-        num_sim=num_sim, num_steps=num_steps, seed=seed, h=1e-3, use_numba=use_numba
-    )
+        # ---------- Display Metrics ----------
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Option Price", f"{price:.4f}" if price is not None else "N/A")
+        col2.metric("Delta", f"{delta:.4f}" if delta is not None else "N/A")
+        col3.metric("Gamma", f"{gamma:.4f}" if gamma is not None else "N/A")
 
-    # Ensure delta/gamma are scalars
-    if isinstance(delta, (np.ndarray, list)):
-        delta = float(np.mean(delta))
-    if isinstance(gamma, (np.ndarray, list)):
-        gamma = float(np.mean(gamma))
+        status = "✅" if price is not None and delta is not None and gamma is not None else "⚠️"
+        st.caption(f"{status} Pricing computed in {t_price_ms:.2f} ms using Monte Carlo with {num_sim:,} paths and {num_steps} steps.")
 
-    # ---------- Display Metrics ----------
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Option Price", f"{price:.4f}" if price is not None else "N/A")
-    col2.metric("Delta", f"{delta:.4f}" if delta is not None else "N/A")
-    col3.metric("Gamma", f"{gamma:.4f}" if gamma is not None else "N/A")
+        # ---------- Confidence Interval ----------
+        try:
+            discounted = simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q=q)
+            mean_price = np.mean(discounted)
+            std_error = np.std(discounted) / np.sqrt(num_sim)
+            ci_lower = mean_price - 1.96 * std_error
+            ci_upper = mean_price + 1.96 * std_error
+            st.markdown(f"**95% Confidence Interval:** {ci_lower:.4f} - {ci_upper:.4f}")
+        except Exception as e:
+            st.error(f"Confidence interval calculation failed: {str(e)}")
 
-    st.caption(f"Pricing computed in {t_price_ms:.2f} ms using Monte Carlo with {num_sim:,} paths and {num_steps} steps.")
-
-    # ---------- Confidence Interval ----------
-    discounted = simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed)
-    mean_price = np.mean(discounted)
-    std_error = np.std(discounted) / np.sqrt(num_sim)
-    ci_lower = mean_price - 1.96 * std_error
-    ci_upper = mean_price + 1.96 * std_error
-    st.markdown(f"**95% Confidence Interval:** {ci_lower:.4f} - {ci_upper:.4f}")
-
-    # ---------- Histogram ----------
-    st.markdown("#### Payoff Distribution")
-    st.bar_chart(pd.DataFrame({"Discounted Payoff": discounted}), y="Discounted Payoff", use_container_width=True)
+        # ---------- Histogram ----------
+        st.markdown("#### Payoff Distribution")
+        st.bar_chart(pd.DataFrame({"Discounted Payoff": discounted}), y="Discounted Payoff", use_container_width=True)
+    
+    except Exception as e:
+        st.error(f"Critical error during pricing: {str(e)}")
+        logger.exception("Critical pricing failure")
 
 else:
     st.info("Set parameters in the sidebar and click **Run Monte Carlo Pricing** to see results.")
