@@ -10,12 +10,14 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-# --- Make repo root and src importable
-ROOT = Path(__file__).resolve().parents[1]
+# At the top of st_utils.py
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]  # streamlit_app/
 SRC = ROOT / "src"
-sys.path.insert(0, str(ROOT))
-if SRC.exists():
-    sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(SRC))  # <- add src to PYTHONPATH
+
 
 # --- Safe import helper
 def safe_import(module_path: str, class_name: str):
@@ -23,8 +25,9 @@ def safe_import(module_path: str, class_name: str):
         module = __import__(module_path, fromlist=[class_name])
         return getattr(module, class_name)
     except Exception as e:
-        print(f"[st_utils] Failed to import {class_name} from {module_path}: {e}")
+        print(f"Failed to import {module_path}.{class_name}: {e}")
         return None
+
 
 
 bs_price = safe_import("pricing_models.black_scholes", "black_scholes")
