@@ -1,5 +1,3 @@
-# streamlit_app / st_utils.py
-
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -59,10 +57,10 @@ def _simulate_payoffs_fallback(
     seed: Optional[int] = 42,
     q: float = 0.0,
 ) -> np.ndarray:
-    """Loop-based fallback that works on BOTH local and Streamlit Cloud"""
+    """Robust loop-based fallback that works on Streamlit Cloud"""
     try:
-        # CRITICAL FIX: Use legacy random seed for compatibility
-        np.random.seed(int(seed) if seed is not None else None)
+        # Reset seed properly for reproducibility
+        np.random.seed(seed)
         dt = T / num_steps
         Z = np.random.standard_normal((num_sim, num_steps))
         
@@ -70,7 +68,7 @@ def _simulate_payoffs_fallback(
         S_paths = np.zeros((num_sim, num_steps))
         S_paths[:, 0] = S
         
-        # Generate paths with dividend yield (exact match to page implementation)
+        # Generate paths with dividend yield
         for t in range(1, num_steps):
             S_paths[:, t] = S_paths[:, t-1] * np.exp(
                 (r - q - 0.5 * sigma**2) * dt + 
@@ -87,9 +85,6 @@ def _simulate_payoffs_fallback(
     except Exception as e:
         logger.error(f"Monte Carlo fallback failed: {str(e)}")
         raise
-
-# Expose the fallback function for external use
-simulate_payoffs = _simulate_payoffs_fallback  # <-- THIS LINE ADDED
 
 # ---------- Cache Helpers ----------
 @st.cache_resource(show_spinner=False)
