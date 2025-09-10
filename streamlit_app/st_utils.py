@@ -96,9 +96,19 @@ VolatilitySurfaceGenerator = safe_import("volatility_surface.surface_generator",
 check_butterfly_arbitrage = safe_import("volatility_surface.utils.arbitrage_utils", "check_butterfly_arbitrage")
 
 # ---------- Internal fallback Monte Carlo (loop-based) ----------
-def _ensure_scalar(value: Union[float, np.ndarray, List]) -> float:
-    """Convert arrays or lists to scalar values"""
-    if isinstance(value, (np.ndarray, list)):
+def _ensure_scalar(value: Union[float, np.ndarray, List, pd.Series]) -> float:
+    """Convert arrays, lists, or pandas Series to scalar values"""
+    if isinstance(value, (np.ndarray, list, pd.Series)):
+        return float(np.mean(value))
+    return float(value)
+
+def _extract_scalar(value: Any) -> float:
+    """Extract scalar value from pandas Series or other containers"""
+    if isinstance(value, pd.Series) and len(value) == 1:
+        return float(value.values[0])
+    elif hasattr(value, 'item'):
+        return float(value.item())
+    elif isinstance(value, (np.ndarray, list)):
         return float(np.mean(value))
     return float(value)
 
@@ -127,12 +137,12 @@ def _simulate_payoffs_fallback(
         
         # Initialize price paths
         S_paths = np.zeros((num_sim, num_steps))
-        S_paths[:, 0] = _ensure_scalar(S)
+        S_paths[:, 0] = _extract_scalar(S)
         
         # Convert all parameters to scalars to prevent shape mismatches
-        r = _ensure_scalar(r)
-        q = _ensure_scalar(q)
-        sigma = _ensure_scalar(sigma)
+        r = _extract_scalar(r)
+        q = _extract_scalar(q)
+        sigma = _extract_scalar(sigma)
         
         # Generate paths with dividend yield (exact match to page implementation)
         for t in range(1, num_steps):
@@ -143,9 +153,9 @@ def _simulate_payoffs_fallback(
         
         # Calculate terminal payoffs
         if option_type == "call":
-            payoff = np.maximum(S_paths[:, -1] - _ensure_scalar(K), 0.0)
+            payoff = np.maximum(S_paths[:, -1] - _extract_scalar(K), 0.0)
         else:
-            payoff = np.maximum(_ensure_scalar(K) - S_paths[:, -1], 0.0)
+            payoff = np.maximum(_extract_scalar(K) - S_paths[:, -1], 0.0)
             
         return np.exp(-r * T) * payoff
     except Exception as e:
@@ -273,12 +283,12 @@ def price_monte_carlo(
     Always returns a float (never None).
     """
     # Convert parameters to scalars to prevent shape mismatches
-    S = _ensure_scalar(S)
-    K = _ensure_scalar(K)
-    T = _ensure_scalar(T)
-    r = _ensure_scalar(r)
-    sigma = _ensure_scalar(sigma)
-    q = _ensure_scalar(q)
+    S = _extract_scalar(S)
+    K = _extract_scalar(K)
+    T = _extract_scalar(T)
+    r = _extract_scalar(r)
+    sigma = _extract_scalar(sigma)
+    q = _extract_scalar(q)
     
     # Attempt to use optimized pricer
     mc = get_mc_pricer(num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba)
@@ -321,12 +331,12 @@ def greeks_mc_delta_gamma(
     Always returns numeric values (never None).
     """
     # Convert parameters to scalars to prevent shape mismatches
-    S = _ensure_scalar(S)
-    K = _ensure_scalar(K)
-    T = _ensure_scalar(T)
-    r = _ensure_scalar(r)
-    sigma = _ensure_scalar(sigma)
-    q = _ensure_scalar(q)
+    S = _extract_scalar(S)
+    K = _extract_scalar(K)
+    T = _extract_scalar(T)
+    r = _extract_scalar(r)
+    sigma = _extract_scalar(sigma)
+    q = _extract_scalar(q)
     
     mc = get_mc_pricer(num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba)
     # If external pricer works, use it

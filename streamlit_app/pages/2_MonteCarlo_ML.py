@@ -16,13 +16,24 @@ try:
         get_mc_ml_surrogate,
         timeit_ms,
         price_monte_carlo,
-        greeks_mc_delta_gamma
+        greeks_mc_delta_gamma,
+        _extract_scalar
     )
     logger = logging.getLogger("monte_carlo_ml")
     logger.info("Successfully imported from st_utils")
 except Exception as e:
     logger = logging.getLogger("monte_carlo_ml")
     logger.error(f"Failed to import from st_utils: {str(e)}")
+    
+    # Helper function to extract scalar values
+    def _extract_scalar(value):
+        if isinstance(value, pd.Series) and len(value) == 1:
+            return float(value.values[0])
+        elif hasattr(value, 'item'):
+            return float(value.item())
+        elif isinstance(value, (np.ndarray, list)):
+            return float(np.mean(value))
+        return float(value)
     
     # Fallback implementation if imports fail
     def get_mc_pricer(num_sim, num_steps, seed):
@@ -43,12 +54,12 @@ except Exception as e:
         """Robust fallback implementation that never returns None"""
         try:
             # Convert all parameters to scalars to prevent shape mismatches
-            S = float(np.mean(S)) if isinstance(S, (np.ndarray, list)) else float(S)
-            K = float(np.mean(K)) if isinstance(K, (np.ndarray, list)) else float(K)
-            T = float(np.mean(T)) if isinstance(T, (np.ndarray, list)) else float(T)
-            r = float(np.mean(r)) if isinstance(r, (np.ndarray, list)) else float(r)
-            sigma = float(np.mean(sigma)) if isinstance(sigma, (np.ndarray, list)) else float(sigma)
-            q = float(np.mean(q)) if isinstance(q, (np.ndarray, list)) else float(q)
+            S = _extract_scalar(S)
+            K = _extract_scalar(K)
+            T = _extract_scalar(T)
+            r = _extract_scalar(r)
+            sigma = _extract_scalar(sigma)
+            q = _extract_scalar(q)
             
             np.random.seed(int(seed))
             dt = T / num_steps
@@ -338,18 +349,22 @@ if train:
                         y = []
                         for _, row in X.iterrows():
                             # CRITICAL FIX: Ensure all parameters are scalars
-                            S_val = float(row.S)
-                            K_val = float(row.K)
-                            T_val = float(row.T)
-                            r_val = float(row.r)
-                            sigma_val = float(row.sigma)
-                            q_val = float(row.q)
-                            
-                            price = price_monte_carlo(
-                                S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
-                                num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
-                            )
-                            y.append(price)
+                            try:
+                                S_val = _extract_scalar(row.S)
+                                K_val = _extract_scalar(row.K)
+                                T_val = _extract_scalar(row.T)
+                                r_val = _extract_scalar(row.r)
+                                sigma_val = _extract_scalar(row.sigma)
+                                q_val = _extract_scalar(row.q)
+                                
+                                price = price_monte_carlo(
+                                    S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
+                                    num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
+                                )
+                                y.append(price)
+                            except Exception as e:
+                                logger.error(f"MC pricing failed for row: {row}, error: {str(e)}")
+                                y.append(0.0)
                         y = np.array(y)
                     return self
                 
@@ -362,12 +377,12 @@ if train:
                     for _, row in X.iterrows():
                         try:
                             # CRITICAL FIX: Ensure all parameters are scalars
-                            S_val = float(row.S)
-                            K_val = float(row.K)
-                            T_val = float(row.T)
-                            r_val = float(row.r)
-                            sigma_val = float(row.sigma)
-                            q_val = float(row.q)
+                            S_val = _extract_scalar(row.S)
+                            K_val = _extract_scalar(row.K)
+                            T_val = _extract_scalar(row.T)
+                            r_val = _extract_scalar(row.r)
+                            sigma_val = _extract_scalar(row.sigma)
+                            q_val = _extract_scalar(row.q)
                             
                             price = price_monte_carlo(
                                 S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
@@ -401,7 +416,15 @@ if train:
         status_text.text("Training ML surrogate...")
         progress_bar.progress(60)
         
-        (_, t_fit_ms) = timeit_ms(ml.fit, df, None)
+        # CRITICAL FIX: Ensure df has proper dtypes before fitting
+        df_numeric = df.copy()
+        for col in df_numeric.columns:
+            try:
+                df_numeric[col] = df_numeric[col].astype(float)
+            except:
+                logger.warning(f"Could not convert column {col} to float")
+        
+        (_, t_fit_ms) = timeit_ms(ml.fit, df_numeric, None)
         
         # ---------- Predict single point ----------
         status_text.text("Generating predictions...")
@@ -476,12 +499,12 @@ if train:
         for _, row in df.iterrows():
             try:
                 # CRITICAL FIX: Ensure all parameters are scalars
-                S_val = float(row.S)
-                K_val = float(row.K)
-                T_val = float(row.T)
-                r_val = float(row.r)
-                sigma_val = float(row.sigma)
-                q_val = float(row.q)
+                S_val = _extract_scalar(row.S)
+                K_val = _extract_scalar(row.K)
+                T_val = _extract_scalar(row.T)
+                r_val = _extract_scalar(row.r)
+                sigma_val = _extract_scalar(row.sigma)
+                q_val = _extract_scalar(row.q)
                 
                 price = price_monte_carlo(
                     S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
