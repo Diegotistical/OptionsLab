@@ -5,6 +5,8 @@ import numpy as np
 import logging
 from scipy.stats import norm
 
+# Configure logging
+
 logger = logging.getLogger(__name__)
 
 
