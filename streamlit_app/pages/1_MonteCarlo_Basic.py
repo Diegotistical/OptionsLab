@@ -9,7 +9,8 @@ from streamlit_app.st_utils import (
     price_monte_carlo,
     greeks_mc_delta_gamma,
     timeit_ms,
-    show_repo_status
+    show_repo_status,
+    simulate_payoffs  # <-- IMPORT THE EXPOSED FUNCTION
 )
 
 # Configure logging
@@ -78,8 +79,7 @@ if run:
         # ---------- Confidence Interval ----------
         try:
             # Use the SAME fallback function as pricing for consistency
-            from streamlit_app.st_utils import _simulate_payoffs_fallback
-            discounted = _simulate_payoffs_fallback(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q)
+            discounted = simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q)
             mean_price = np.mean(discounted)
             std_error = np.std(discounted) / np.sqrt(num_sim)
             ci_lower = mean_price - 1.96 * std_error

@@ -1,3 +1,5 @@
+# streamlit_app / st_utils.py
+
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -85,6 +87,9 @@ def _simulate_payoffs_fallback(
     except Exception as e:
         logger.error(f"Monte Carlo fallback failed: {str(e)}")
         raise
+
+# Expose the fallback function for external use
+simulate_payoffs = _simulate_payoffs_fallback  # <-- THIS LINE ADDED
 
 # ---------- Cache Helpers ----------
 @st.cache_resource(show_spinner=False)
