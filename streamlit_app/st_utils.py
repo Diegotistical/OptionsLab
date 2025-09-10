@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 import time
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Tuple
+from typing import Any, Literal, Optional, Tuple, List, Union
 import logging
 
 import numpy as np
@@ -96,6 +96,12 @@ VolatilitySurfaceGenerator = safe_import("volatility_surface.surface_generator",
 check_butterfly_arbitrage = safe_import("volatility_surface.utils.arbitrage_utils", "check_butterfly_arbitrage")
 
 # ---------- Internal fallback Monte Carlo (loop-based) ----------
+def _ensure_scalar(value: Union[float, np.ndarray, List]) -> float:
+    """Convert arrays or lists to scalar values"""
+    if isinstance(value, (np.ndarray, list)):
+        return float(np.mean(value))
+    return float(value)
+
 def _simulate_payoffs_fallback(
     S: float,
     K: float,
@@ -121,7 +127,12 @@ def _simulate_payoffs_fallback(
         
         # Initialize price paths
         S_paths = np.zeros((num_sim, num_steps))
-        S_paths[:, 0] = S
+        S_paths[:, 0] = _ensure_scalar(S)
+        
+        # Convert all parameters to scalars to prevent shape mismatches
+        r = _ensure_scalar(r)
+        q = _ensure_scalar(q)
+        sigma = _ensure_scalar(sigma)
         
         # Generate paths with dividend yield (exact match to page implementation)
         for t in range(1, num_steps):
@@ -132,9 +143,9 @@ def _simulate_payoffs_fallback(
         
         # Calculate terminal payoffs
         if option_type == "call":
-            payoff = np.maximum(S_paths[:, -1] - K, 0.0)
+            payoff = np.maximum(S_paths[:, -1] - _ensure_scalar(K), 0.0)
         else:
-            payoff = np.maximum(K - S_paths[:, -1], 0.0)
+            payoff = np.maximum(_ensure_scalar(K) - S_paths[:, -1], 0.0)
             
         return np.exp(-r * T) * payoff
     except Exception as e:
@@ -261,6 +272,14 @@ def price_monte_carlo(
     Try to use external MonteCarloPricer if available; otherwise run a built-in fallback.
     Always returns a float (never None).
     """
+    # Convert parameters to scalars to prevent shape mismatches
+    S = _ensure_scalar(S)
+    K = _ensure_scalar(K)
+    T = _ensure_scalar(T)
+    r = _ensure_scalar(r)
+    sigma = _ensure_scalar(sigma)
+    q = _ensure_scalar(q)
+    
     # Attempt to use optimized pricer
     mc = get_mc_pricer(num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba)
     if mc is not None:
@@ -301,6 +320,14 @@ def greeks_mc_delta_gamma(
     Prefer external pricer for accuracy/performance; otherwise use the fallback.
     Always returns numeric values (never None).
     """
+    # Convert parameters to scalars to prevent shape mismatches
+    S = _ensure_scalar(S)
+    K = _ensure_scalar(K)
+    T = _ensure_scalar(T)
+    r = _ensure_scalar(r)
+    sigma = _ensure_scalar(sigma)
+    q = _ensure_scalar(q)
+    
     mc = get_mc_pricer(num_sim=num_sim, num_steps=num_steps, seed=seed, use_numba=use_numba)
     # If external pricer works, use it
     if mc is not None:

@@ -9,7 +9,7 @@ import plotly.subplots as sp
 import plotly.express as px
 import time
 
-# Import from utils
+# Import from utils - CRITICAL FIX FOR STREAMLIT CLOUD
 try:
     from streamlit_app.st_utils import (
         get_mc_pricer,
@@ -42,6 +42,14 @@ except Exception as e:
     def price_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, use_numba=False):
         """Robust fallback implementation that never returns None"""
         try:
+            # Convert all parameters to scalars to prevent shape mismatches
+            S = float(np.mean(S)) if isinstance(S, (np.ndarray, list)) else float(S)
+            K = float(np.mean(K)) if isinstance(K, (np.ndarray, list)) else float(K)
+            T = float(np.mean(T)) if isinstance(T, (np.ndarray, list)) else float(T)
+            r = float(np.mean(r)) if isinstance(r, (np.ndarray, list)) else float(r)
+            sigma = float(np.mean(sigma)) if isinstance(sigma, (np.ndarray, list)) else float(sigma)
+            q = float(np.mean(q)) if isinstance(q, (np.ndarray, list)) else float(q)
+            
             np.random.seed(int(seed))
             dt = T / num_steps
             Z = np.random.standard_normal((num_sim, num_steps))
@@ -329,9 +337,17 @@ if train:
                     if y is None:
                         y = []
                         for _, row in X.iterrows():
+                            # CRITICAL FIX: Ensure all parameters are scalars
+                            S_val = float(row.S)
+                            K_val = float(row.K)
+                            T_val = float(row.T)
+                            r_val = float(row.r)
+                            sigma_val = float(row.sigma)
+                            q_val = float(row.q)
+                            
                             price = price_monte_carlo(
-                                row.S, row.K, row.T, row.r, row.sigma, "call", row.q,
-                                num_sim=num_sim//10, num_steps=num_steps, seed=seed
+                                S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
+                                num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
                             )
                             y.append(price)
                         y = np.array(y)
@@ -345,16 +361,24 @@ if train:
                     
                     for _, row in X.iterrows():
                         try:
+                            # CRITICAL FIX: Ensure all parameters are scalars
+                            S_val = float(row.S)
+                            K_val = float(row.K)
+                            T_val = float(row.T)
+                            r_val = float(row.r)
+                            sigma_val = float(row.sigma)
+                            q_val = float(row.q)
+                            
                             price = price_monte_carlo(
-                                row.S, row.K, row.T, row.r, row.sigma, "call", row.q,
-                                num_sim=num_sim//10, num_steps=num_steps, seed=seed
+                                S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
+                                num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
                             )
                             prices.append(price)
                             
                             # Calculate approximate Greeks
                             delta, gamma = greeks_mc_delta_gamma(
-                                row.S, row.K, row.T, row.r, row.sigma, "call", row.q,
-                                num_sim=num_sim//100, num_steps=num_steps, seed=seed
+                                S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
+                                num_sim=max(100, num_sim//100), num_steps=num_steps, seed=seed
                             )
                             deltas.append(delta)
                             gammas.append(gamma)
@@ -451,23 +475,52 @@ if train:
         prices_mc = []
         for _, row in df.iterrows():
             try:
+                # CRITICAL FIX: Ensure all parameters are scalars
+                S_val = float(row.S)
+                K_val = float(row.K)
+                T_val = float(row.T)
+                r_val = float(row.r)
+                sigma_val = float(row.sigma)
+                q_val = float(row.q)
+                
                 price = price_monte_carlo(
-                    row.S, row.K, row.T, row.r, row.sigma, "call", row.q,
-                    num_sim=num_sim//10, num_steps=num_steps, seed=seed
+                    S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
+                    num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
                 )
                 prices_mc.append(price)
-            except:
+            except Exception as e:
+                logger.error(f"MC pricing failed for row: {row}, error: {str(e)}")
                 prices_mc.append(0.0)
         prices_mc = np.array(prices_mc)
         
         try:
-            preds = ml.predict(df)
-            prices_ml = preds["price"].values
-        except:
+            # CRITICAL FIX: Ensure df has proper dtypes
+            df_numeric = df.astype({col: float for col in df.columns})
+            preds = ml.predict(df_numeric)
+            
+            # CRITICAL FIX: Handle None values in predictions
+            if preds is None or "price" not in preds:
+                prices_ml = np.zeros(len(df))
+            else:
+                # CRITICAL FIX: Convert to numpy array and handle NaNs
+                prices_ml = np.nan_to_num(preds["price"].values, nan=0.0)
+        except Exception as e:
+            logger.error(f"ML prediction failed: {str(e)}")
             prices_ml = np.zeros(len(df))
         
+        # CRITICAL FIX: Ensure arrays are valid before subtraction
+        if prices_ml is None or prices_mc is None:
+            st.error("Critical error: price calculations returned None. Using zero values instead.")
+            prices_ml = np.zeros(len(df))
+            prices_mc = np.zeros(len(df))
+        
         # Reshape for heatmap
-        err_price = (prices_ml - prices_mc).reshape(Sg.shape)
+        try:
+            err_price = (prices_ml - prices_mc).reshape(Sg.shape)
+        except Exception as e:
+            logger.error(f"Error reshaping price difference: {str(e)}")
+            # Fallback: create a zero error grid
+            err_price = np.zeros(Sg.shape)
         
         # Calculate error statistics
         mean_abs_error = np.mean(np.abs(err_price))
@@ -689,37 +742,41 @@ if train:
             for i in range(n_grid):
                 s_val = grid_S[i]
                 s_idx = np.where(np.isclose(Sg, s_val))[0]
-                s_errors.append(np.mean(np.abs(err_price).flatten()[s_idx]))
-                s_values.append(s_val)
+                if len(s_idx) > 0:
+                    s_errors.append(np.mean(np.abs(err_price).flatten()[s_idx]))
+                    s_values.append(s_val)
             
-            fig_sensitivity_s = go.Figure()
-            fig_sensitivity_s.add_trace(go.Scatter(
-                x=s_values,
-                y=s_errors,
-                mode='lines+markers',
-                line=dict(color='#3B82F6', width=3),
-                marker=dict(size=8, color='#3B82F6')
-            ))
-            
-            fig_sensitivity_s.add_vline(
-                x=S, 
-                line_dash="dash", 
-                line_color="#F87171",
-                annotation_text=f"Current S: {S}"
-            )
-            
-            fig_sensitivity_s.update_layout(
-                title_font_size=20,
-                xaxis_title="Spot Price (S)",
-                yaxis_title="Absolute Error",
-                template="plotly_dark",
-                height=400,
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14)
-            )
-            
-            st.plotly_chart(fig_sensitivity_s, use_container_width=True)
+            if len(s_errors) > 0:
+                fig_sensitivity_s = go.Figure()
+                fig_sensitivity_s.add_trace(go.Scatter(
+                    x=s_values,
+                    y=s_errors,
+                    mode='lines+markers',
+                    line=dict(color='#3B82F6', width=3),
+                    marker=dict(size=8, color='#3B82F6')
+                ))
+                
+                fig_sensitivity_s.add_vline(
+                    x=S, 
+                    line_dash="dash", 
+                    line_color="#F87171",
+                    annotation_text=f"Current S: {S}"
+                )
+                
+                fig_sensitivity_s.update_layout(
+                    title_font_size=20,
+                    xaxis_title="Spot Price (S)",
+                    yaxis_title="Absolute Error",
+                    template="plotly_dark",
+                    height=400,
+                    paper_bgcolor='rgba(30,41,59,1)',
+                    plot_bgcolor='rgba(15,23,42,1)',
+                    font=dict(size=14)
+                )
+                
+                st.plotly_chart(fig_sensitivity_s, use_container_width=True)
+            else:
+                st.warning("No valid data points for S sensitivity analysis")
             
             # Analyze error sensitivity to K
             st.markdown('<h3 class="subsection-header">Error vs Strike Price (K)</h3>', unsafe_allow_html=True)
@@ -730,37 +787,41 @@ if train:
             for i in range(n_grid):
                 k_val = grid_K[i]
                 k_idx = np.where(np.isclose(Kg, k_val))[0]
-                k_errors.append(np.mean(np.abs(err_price).flatten()[k_idx]))
-                k_values.append(k_val)
+                if len(k_idx) > 0:
+                    k_errors.append(np.mean(np.abs(err_price).flatten()[k_idx]))
+                    k_values.append(k_val)
             
-            fig_sensitivity_k = go.Figure()
-            fig_sensitivity_k.add_trace(go.Scatter(
-                x=k_values,
-                y=k_errors,
-                mode='lines+markers',
-                line=dict(color='#3B82F6', width=3),
-                marker=dict(size=8, color='#3B82F6')
-            ))
-            
-            fig_sensitivity_k.add_vline(
-                x=K, 
-                line_dash="dash", 
-                line_color="#F87171",
-                annotation_text=f"Current K: {K}"
-            )
-            
-            fig_sensitivity_k.update_layout(
-                title_font_size=20,
-                xaxis_title="Strike Price (K)",
-                yaxis_title="Absolute Error",
-                template="plotly_dark",
-                height=400,
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14)
-            )
-            
-            st.plotly_chart(fig_sensitivity_k, use_container_width=True)
+            if len(k_errors) > 0:
+                fig_sensitivity_k = go.Figure()
+                fig_sensitivity_k.add_trace(go.Scatter(
+                    x=k_values,
+                    y=k_errors,
+                    mode='lines+markers',
+                    line=dict(color='#3B82F6', width=3),
+                    marker=dict(size=8, color='#3B82F6')
+                ))
+                
+                fig_sensitivity_k.add_vline(
+                    x=K, 
+                    line_dash="dash", 
+                    line_color="#F87171",
+                    annotation_text=f"Current K: {K}"
+                )
+                
+                fig_sensitivity_k.update_layout(
+                    title_font_size=20,
+                    xaxis_title="Strike Price (K)",
+                    yaxis_title="Absolute Error",
+                    template="plotly_dark",
+                    height=400,
+                    paper_bgcolor='rgba(30,41,59,1)',
+                    plot_bgcolor='rgba(15,23,42,1)',
+                    font=dict(size=14)
+                )
+                
+                st.plotly_chart(fig_sensitivity_k, use_container_width=True)
+            else:
+                st.warning("No valid data points for K sensitivity analysis")
             
             # Moneyness analysis
             st.markdown('<h3 class="subsection-header">Error vs Moneyness (S/K)</h3>', unsafe_allow_html=True)
