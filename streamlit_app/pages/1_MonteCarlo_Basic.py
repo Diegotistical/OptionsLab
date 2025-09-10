@@ -10,14 +10,71 @@ from plotly.colors import qualitative
 import plotly.express as px
 import time
 
-# Import from utils
-from streamlit_app.st_utils import (
-    price_monte_carlo,
-    greeks_mc_delta_gamma,
-    timeit_ms,
-    show_repo_status,
-    simulate_payoffs
-)
+# Import from utils - CRITICAL FIX FOR STREAMLIT CLOUD
+try:
+    from streamlit_app.st_utils import (
+        price_monte_carlo,
+        greeks_mc_delta_gamma,
+        timeit_ms,
+        show_repo_status,
+        simulate_payoffs
+    )
+    logger = logging.getLogger("monte_carlo")
+    logger.info("Successfully imported from st_utils")
+except Exception as e:
+    logger = logging.getLogger("monte_carlo")
+    logger.error(f"Failed to import from st_utils: {str(e)}")
+    
+    # Fallback implementation if imports fail
+    def price_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50_000, num_steps=100, seed=42, use_numba=False):
+        try:
+            np.random.seed(int(seed))
+            dt = T / num_steps
+            Z = np.random.standard_normal((num_sim, num_steps))
+            S_paths = np.zeros((num_sim, num_steps))
+            S_paths[:, 0] = S
+            
+            for t in range(1, num_steps):
+                S_paths[:, t] = S_paths[:, t-1] * np.exp(
+                    (r - q - 0.5 * sigma**2) * dt + 
+                    sigma * np.sqrt(dt) * Z[:, t]
+                )
+            
+            if option_type == "call":
+                payoff = np.maximum(S_paths[:, -1] - K, 0.0)
+            else:
+                payoff = np.maximum(K - S_paths[:, -1], 0.0)
+                
+            discounted = np.exp(-r * T) * payoff
+            return float(np.mean(discounted))
+        except Exception as e:
+            logger.error(f"MC fallback pricing failed: {str(e)}")
+            return None
+    
+    def greeks_mc_delta_gamma(S, K, T, r, sigma, option_type, q=0.0, num_sim=50_000, num_steps=100, seed=42, h=1e-3, use_numba=False):
+        try:
+            p_down = price_monte_carlo(S - h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+            p_mid = price_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+            p_up = price_monte_carlo(S + h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+            
+            if None in [p_down, p_mid, p_up]:
+                return None, None
+                
+            delta = (p_up - p_down) / (2*h)
+            gamma = (p_up - 2*p_mid + p_down) / (h**2)
+            return float(delta), float(gamma)
+        except Exception as e:
+            logger.error(f"Greeks fallback failed: {str(e)}")
+            return None, None
+    
+    def timeit_ms(fn, *args, **kwargs):
+        start = time.perf_counter()
+        out = fn(*args, **kwargs)
+        dt_ms = (time.perf_counter() - start) * 1000.0
+        return out, dt_ms
+    
+    def show_repo_status():
+        st.write("⚠️ Core pricing modules not available. Using fallback implementations.")
 
 # Configure logging
 logger = logging.getLogger("monte_carlo")
@@ -53,19 +110,23 @@ st.markdown("""
         border: 1px solid #334155 !important;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 50px !important;
+        height: 55px !important;
         border-radius: 8px 8px 0 0 !important;
-        font-size: 1.1rem !important;
+        font-size: 1.25rem !important;
         font-weight: 600 !important;
         background-color: #1E293B !important;
         color: #CBD5E1 !important;
         padding: 0 20px !important;
+        flex: 1 !important;
+        min-width: 150px !important;
+        text-align: center !important;
     }
     .stTabs [aria-selected="true"] {
         background-color: #3B82F6 !important;
         color: white !important;
-        font-size: 1.15rem !important;
+        font-size: 1.3rem !important;
         font-weight: 700 !important;
+        border-bottom: 4px solid #1E3A8A !important;
     }
     .chart-container {
         background-color: #1E293B !important;
@@ -258,9 +319,11 @@ if run:
         status_text.text("Generating price paths...")
         progress_bar.progress(60)
         
+        # CRITICAL FIX: Ensure discounted and S_paths are always defined
         try:
             discounted, S_paths = simulate_payoffs(S, K, T, r, sigma, option_type, num_sim, num_steps, seed, q=q)
         except Exception as e:
+            logger.warning(f"simulate_payoffs failed: {str(e)}. Using fallback implementation.")
             # Fallback implementation if simulate_payoffs fails
             np.random.seed(int(seed))
             dt = T / num_steps
@@ -368,7 +431,7 @@ if run:
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # ------------------- TABS for Visualizations ----------
+        # ---------- TABS for Visualizations ----------
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "Pricing Overview", 
             "Path Simulation", 
@@ -377,24 +440,9 @@ if run:
             "Risk Analysis"
         ])
         
-        # Custom CSS for tabs
+        # Add CSS for full-width tabs - CRITICAL FIX FOR STREAMLIT CLOUD
         st.markdown("""
         <style>
-            .stTabs [data-baseweb="tab"] {
-                width: 100% !important;
-                font-size: 1.25rem !important;
-                padding: 14px 0 !important;
-                border-radius: 8px 8px 0 0 !important;
-                transition: all 0.2s ease !important;
-                box-shadow: none !important;
-                margin: 0 !important;
-            }
-            .stTabs [aria-selected="true"] {
-                background-color: #3B82F6 !important;
-                color: white !important;
-                font-weight: 700 !important;
-                border-bottom: 4px solid #1E3A8A !important;
-            }
             .stTabs [data-baseweb="tablist"] {
                 display: flex !important;
                 flex-wrap: wrap !important;
