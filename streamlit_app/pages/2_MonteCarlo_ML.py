@@ -1,4 +1,4 @@
-# Page 2 MC ML.py - Production Grade (Guaranteed Working)
+# Page 2 MC ML.py
 import sys
 from pathlib import Path
 import streamlit as st
@@ -9,483 +9,97 @@ import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
 import time
-import traceback
-import os
-from typing import Any, Dict, Tuple, Optional, Callable, Union, List
 
-# ======================
-# ULTIMATE PATH RESOLUTION
-# ======================
-
-def find_project_root() -> Path:
-    """Find the project root across all possible environments with 100% reliability"""
-    # Strategy 1: Check for Streamlit Cloud standard path
-    if Path("/mount/src/optionslab").exists():
-        return Path("/mount/src/optionslab")
-    
-    # Strategy 2: Check for alternative Streamlit Cloud path
-    if Path("/app").exists() and (Path("/app/src/pricing_models") / "monte_carlo_ml.py").exists():
-        return Path("/app")
-    
-    # Strategy 3: Check current working directory structure
-    cwd = Path.cwd()
-    if (cwd / "src/pricing_models/monte_carlo_ml.py").exists():
-        return cwd
-    
-    # Strategy 4: Check parent directory structure
-    parent = cwd.parent
-    if (parent / "src/pricing_models/monte_carlo_ml.py").exists():
-        return parent
-    
-    # Strategy 5: Check deeper directory structures
-    for _ in range(5):
-        cwd = cwd.parent
-        if (cwd / "src/pricing_models/monte_carlo_ml.py").exists():
-            return cwd
-    
-    # Strategy 6: Check for common project name patterns
-    possible_roots = [
-        Path.home() / "optionslab",
-        Path.home() / "projects/optionslab",
-        Path("/home/app/optionslab")
-    ]
-    for root in possible_roots:
-        if (root / "src/pricing_models/monte_carlo_ml.py").exists():
-            return root
-    
-    # Strategy 7: If all else fails, return current directory
-    return Path.cwd()
-
-def setup_project_paths():
-    """Set up paths with guaranteed success across all environments"""
-    project_root = find_project_root()
-    
-    # Determine src path
-    if (project_root / "src/pricing_models/monte_carlo_ml.py").exists():
-        src_path = project_root / "src"
-    elif (project_root / "streamlit_app/src/pricing_models/monte_carlo_ml.py").exists():
-        src_path = project_root / "streamlit_app/src"
-    else:
-        # Try to find src directory
-        for root, dirs, files in os.walk(str(project_root)):
-            if "monte_carlo_ml.py" in files and "pricing_models" in root:
-                src_path = Path(root).parent.parent
-                break
-        else:
-            # Last resort - assume src is in current directory
-            src_path = Path.cwd()
-    
-    # Add to sys.path if not already there
-    src_str = str(src_path)
-    if src_str not in sys.path:
-        sys.path.insert(0, src_str)
-    
-    # Verify critical files exist
-    monte_carlo_ml_path = src_path / "pricing_models" / "monte_carlo_ml.py"
-    monte_carlo_path = src_path / "pricing_models" / "monte_carlo.py"
-    
-    return project_root, src_path, monte_carlo_ml_path, monte_carlo_path
-
-# ======================
-# PRODUCTION SETUP
-# ======================
-
-# Configure logging with comprehensive error tracking
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger("option_pricer.mc_ml")
-logger.info("Initializing Monte Carlo ML Surrogate module - Guaranteed Working Version")
-
-# Resolve paths with guaranteed success
+# Import from utils - CRITICAL FIX FOR STREAMLIT CLOUD
 try:
-    PROJECT_ROOT, SRC_PATH, MONTE_CARLO_ML_PATH, MONTE_CARLO_PATH = setup_project_paths()
-    logger.info(f"Project root detected at: {PROJECT_ROOT}")
-    logger.info(f"Source path set to: {SRC_PATH}")
-    logger.info(f"MonteCarloML path: {MONTE_CARLO_ML_PATH}")
-    logger.info(f"MonteCarloPricer path: {MONTE_CARLO_PATH}")
-    
-    # Verify critical files exist
-    if not MONTE_CARLO_ML_PATH.exists():
-        logger.warning(f"MonteCarloML file not found at {MONTE_CARLO_ML_PATH}")
-    if not MONTE_CARLO_PATH.exists():
-        logger.warning(f"MonteCarloPricer file not found at {MONTE_CARLO_PATH}")
+    from streamlit_app.st_utils import (
+        get_mc_pricer,
+        get_mc_ml_surrogate,
+        timeit_ms,
+        price_monte_carlo,
+        greeks_mc_delta_gamma,
+        _extract_scalar
+    )
+    logger = logging.getLogger("monte_carlo_ml")
+    logger.info("Successfully imported from st_utils")
 except Exception as e:
-    logger.error(f"Critical error in path resolution: {str(e)}", exc_info=True)
-    PROJECT_ROOT = Path.cwd()
-    SRC_PATH = PROJECT_ROOT / "src"
-    MONTE_CARLO_ML_PATH = SRC_PATH / "pricing_models" / "monte_carlo_ml.py"
-    MONTE_CARLO_PATH = SRC_PATH / "pricing_models" / "monte_carlo.py"
-
-# Global constants for production
-MAX_MEMORY_PCT = 75  # Maximum memory usage percentage
-MIN_MEMORY_AVAIL = 500 * 1024 * 1024  # 500 MB minimum available memory
-MAX_SIMS = 100000    # Hard cap on simulations
-MIN_SIMS = 1000      # Minimum viable simulations
-MAX_STEPS = 250      # Maximum time steps
-MIN_STEPS = 10       # Minimum time steps
-MAX_GRID_SIZE = 25   # Maximum grid points per axis
-MAX_FIT_TIME = 30    # Maximum model fitting time in seconds
-
-# ======================
-# ROBUST UTILITY FUNCTIONS
-# ======================
-
-def safe_scalar(value: Any, default: float = 0.0) -> float:
-    """
-    Ultimate scalar extraction with 100% reliability.
-    Converts any input to a valid float, never returns None.
-    """
-    try:
-        if value is None:
-            logger.warning("Received None value, using default", extra={"trace": True})
-            return default
-        
-        if isinstance(value, (float, int, np.integer, np.floating)):
-            return float(value)
-        
-        if isinstance(value, (list, tuple, np.ndarray)):
-            if len(value) == 0:
-                logger.warning("Empty array/list, using default", extra={"trace": True})
-                return default
-            return float(np.mean(value))
-            
-        if isinstance(value, pd.Series):
-            if value.empty:
-                logger.warning("Empty Series, using default", extra={"trace": True})
-                return default
-            return float(value.iloc[0])
-            
-        if hasattr(value, 'item'):
+    logger = logging.getLogger("monte_carlo_ml")
+    logger.error(f"Failed to import from st_utils: {str(e)}")
+    
+    # Helper function to extract scalar values
+    def _extract_scalar(value):
+        if isinstance(value, pd.Series) and len(value) == 1:
+            return float(value.values[0])
+        elif hasattr(value, 'item'):
             return float(value.item())
-            
-        # Try string conversion
-        try:
-            return float(str(value))
-        except (ValueError, TypeError):
-            logger.warning(f"Could not convert {value} to float, using default", extra={"trace": True})
-            return default
-            
-    except Exception as e:
-        logger.error(f"Critical error in safe_scalar: {str(e)}", exc_info=True)
-        return default
-
-def check_resources() -> bool:
-    """
-    Comprehensive resource check with multiple fallbacks.
-    Returns True if resources are sufficient, False otherwise.
-    """
-    try:
-        # Only check resources if psutil is available
-        try:
-            import psutil
-            memory = psutil.virtual_memory()
-            logger.info(f"Memory usage: {memory.percent:.1f}% | Available: {memory.available/(1024*1024):.1f} MB")
-            
-            if memory.percent > MAX_MEMORY_PCT:
-                st.warning(f"⚠️ System memory usage is high ({memory.percent:.1f}%). "
-                          "Consider reducing simulation size or grid points.")
-                return False
-                
-            if memory.available < MIN_MEMORY_AVAIL:
-                st.warning("⚠️ Low available memory. Performance may be degraded.")
-                return False
-                
-            return True
-        except ImportError:
-            logger.info("psutil not available, skipping memory check")
-            return True
-        except Exception as e:
-            logger.warning(f"Could not check system resources: {str(e)}")
-            return True
-            
-    except Exception as e:
-        logger.warning(f"Resource check failed: {str(e)}")
-        return True  # Assume resources are sufficient if we can't check
-
-def validate_parameters(S: Any, K: Any, T: Any, r: Any, sigma: Any, q: Any = 0.0) -> bool:
-    """
-    Comprehensive parameter validation with user-friendly error messages.
-    """
-    try:
-        S = safe_scalar(S)
-        K = safe_scalar(K)
-        T = safe_scalar(T)
-        r = safe_scalar(r)
-        sigma = safe_scalar(sigma)
-        q = safe_scalar(q)
-        
-        # Validate ranges
-        if S <= 0:
-            st.error(f"❌ Spot price (S) must be positive. Current value: {S}")
-            return False
-        if K <= 0:
-            st.error(f"❌ Strike price (K) must be positive. Current value: {K}")
-            return False
-        if T <= 0:
-            st.error(f"❌ Time to maturity (T) must be positive. Current value: {T}")
-            return False
-        if sigma <= 0:
-            st.error(f"❌ Volatility (sigma) must be positive. Current value: {sigma}")
-            return False
-        if r < -0.5 or r > 1.0:
-            st.warning(f"⚠️ Risk-free rate (r) is outside typical range [-0.5, 1.0]. Current value: {r}")
-        if q < -0.5 or q > 1.0:
-            st.warning(f"⚠️ Dividend yield (q) is outside typical range [-0.5, 1.0]. Current value: {q}")
-            
-        return True
-    except Exception as e:
-        logger.error(f"Parameter validation failed: {str(e)}", exc_info=True)
-        st.error("❌ Invalid parameter format. Please check all inputs.")
-        return False
-
-# ======================
-# ULTIMATE IMPORT HANDLING
-# ======================
-
-def import_monte_carlo_ml():
-    """Guaranteed import of MonteCarloML with detailed diagnostics"""
-    try:
-        # Strategy 1: Direct import
-        try:
-            from pricing_models.monte_carlo_ml import MonteCarloML
-            logger.info("Successfully imported MonteCarloML directly")
-            return MonteCarloML, None
-        except ImportError as e:
-            logger.debug(f"Direct import failed: {str(e)}")
-        
-        # Strategy 2: Add src to path and try again
-        try:
-            if str(SRC_PATH) not in sys.path:
-                sys.path.insert(0, str(SRC_PATH))
-                logger.info(f"Added {SRC_PATH} to sys.path during import attempt")
-            
-            from pricing_models.monte_carlo_ml import MonteCarloML
-            logger.info("Successfully imported MonteCarloML after adding src to path")
-            return MonteCarloML, None
-        except ImportError as e:
-            logger.debug(f"Import after path adjustment failed: {str(e)}")
-        
-        # Strategy 3: Absolute import using file path
-        try:
-            if MONTE_CARLO_ML_PATH.exists():
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    "monte_carlo_ml", 
-                    str(MONTE_CARLO_ML_PATH)
-                )
-                monte_carlo_ml = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(monte_carlo_ml)
-                logger.info(f"Successfully imported MonteCarloML from {MONTE_CARLO_ML_PATH}")
-                return monte_carlo_ml.MonteCarloML, None
-            else:
-                error_msg = f"MonteCarloML file not found at {MONTE_CARLO_ML_PATH}"
-                logger.error(error_msg)
-                return None, error_msg
-        except Exception as e:
-            error_msg = f"Absolute import failed: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return None, error_msg
-        
-    except Exception as e:
-        error_msg = f"Unexpected error during MonteCarloML import: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return None, error_msg
-
-def import_monte_carlo():
-    """Guaranteed import of MonteCarloPricer with detailed diagnostics"""
-    try:
-        # Strategy 1: Direct import
-        try:
-            from pricing_models.monte_carlo import MonteCarloPricer
-            logger.info("Successfully imported MonteCarloPricer directly")
-            return MonteCarloPricer, None
-        except ImportError as e:
-            logger.debug(f"Direct import failed: {str(e)}")
-        
-        # Strategy 2: Add src to path and try again
-        try:
-            if str(SRC_PATH) not in sys.path:
-                sys.path.insert(0, str(SRC_PATH))
-                logger.info(f"Added {SRC_PATH} to sys.path during import attempt")
-            
-            from pricing_models.monte_carlo import MonteCarloPricer
-            logger.info("Successfully imported MonteCarloPricer after adding src to path")
-            return MonteCarloPricer, None
-        except ImportError as e:
-            logger.debug(f"Import after path adjustment failed: {str(e)}")
-        
-        # Strategy 3: Absolute import using file path
-        try:
-            if MONTE_CARLO_PATH.exists():
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    "monte_carlo", 
-                    str(MONTE_CARLO_PATH)
-                )
-                monte_carlo = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(monte_carlo)
-                logger.info(f"Successfully imported MonteCarloPricer from {MONTE_CARLO_PATH}")
-                return monte_carlo.MonteCarloPricer, None
-            else:
-                error_msg = f"MonteCarloPricer file not found at {MONTE_CARLO_PATH}"
-                logger.error(error_msg)
-                return None, error_msg
-        except Exception as e:
-            error_msg = f"Absolute import failed: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return None, error_msg
-        
-    except Exception as e:
-        error_msg = f"Unexpected error during MonteCarloPricer import: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return None, error_msg
-
-# Attempt to import both classes with detailed diagnostics
-MonteCarloML, ml_import_error = import_monte_carlo_ml()
-MonteCarloPricer, mc_import_error = import_monte_carlo()
-
-# Fallback implementation for get_mc_pricer
-def get_mc_pricer(num_sim, num_steps, seed):
-    """Guaranteed to return a valid pricer or None with detailed diagnostics"""
-    if MonteCarloPricer is None:
-        if mc_import_error:
-            logger.warning(f"MC pricer not available: {mc_import_error}")
-        else:
-            logger.warning("MC pricer not available but no import error found")
+        elif isinstance(value, (np.ndarray, list)):
+            return float(np.mean(value))
+        return float(value)
+    
+    # Fallback implementation if imports fail
+    def get_mc_pricer(num_sim, num_steps, seed):
+        logger.warning("MC pricer not available. Using fallback.")
         return None
     
-    try:
-        return MonteCarloPricer(num_simulations=int(num_sim), num_steps=int(num_steps), seed=seed)
-    except Exception as e:
-        logger.error(f"MonteCarloPricer init failed: {str(e)}", exc_info=True)
-        return None
-
-# Fallback implementation for get_mc_ml_surrogate
-def get_mc_ml_surrogate(num_sim, num_steps, seed):
-    """Guaranteed to return a valid ML surrogate or None with detailed diagnostics"""
-    if MonteCarloML is None:
-        if ml_import_error:
-            logger.warning(f"MonteCarloML not available: {ml_import_error}")
-        else:
-            logger.warning("MonteCarloML not available but no import error found")
+    def get_mc_ml_surrogate(num_sim, num_steps, seed):
+        logger.warning("ML surrogate not available.")
         return None
     
-    try:
-        return MonteCarloML(num_simulations=int(num_sim), num_steps=int(num_steps), seed=seed)
-    except Exception as e:
-        logger.error(f"MonteCarloML init failed: {str(e)}", exc_info=True)
-        return None
-
-# Fallback implementation for timeit_ms
-def timeit_ms(fn, *args, **kwargs):
-    """Safe timing function that never fails"""
-    try:
+    def timeit_ms(fn, *args, **kwargs):
         start = time.perf_counter()
         out = fn(*args, **kwargs)
         dt_ms = (time.perf_counter() - start) * 1000.0
         return out, dt_ms
-    except Exception as e:
-        logger.error(f"timeit_ms failed: {str(e)}", exc_info=True)
-        return None, 0.0
-
-# Fallback implementation for price_monte_carlo
-def price_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, use_numba=False):
-    """Ultimate fallback implementation that never returns None"""
-    try:
-        # Convert all parameters to scalars to prevent shape mismatches
-        S = safe_scalar(S)
-        K = safe_scalar(K)
-        T = safe_scalar(T)
-        r = safe_scalar(r)
-        sigma = safe_scalar(sigma)
-        q = safe_scalar(q)
-        
-        # Validate parameters
-        if not validate_parameters(S, K, T, r, sigma, q):
-            return 0.0
-            
-        # Apply hard limits to prevent excessive resource usage
-        num_sim = max(MIN_SIMS, min(num_sim, MAX_SIMS))
-        num_steps = max(MIN_STEPS, min(num_steps, MAX_STEPS))
-        
-        # Seed the random number generator
+    
+    def price_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, use_numba=False):
+        """Robust fallback implementation that never returns None"""
         try:
+            # Convert all parameters to scalars to prevent shape mismatches
+            S = _extract_scalar(S)
+            K = _extract_scalar(K)
+            T = _extract_scalar(T)
+            r = _extract_scalar(r)
+            sigma = _extract_scalar(sigma)
+            q = _extract_scalar(q)
+            
             np.random.seed(int(seed))
+            dt = T / num_steps
+            Z = np.random.standard_normal((num_sim, num_steps))
+            S_paths = np.zeros((num_sim, num_steps))
+            S_paths[:, 0] = S
+            
+            for t in range(1, num_steps):
+                drift = (r - q - 0.5 * sigma**2) * dt
+                diffusion = sigma * np.sqrt(dt) * Z[:, t]
+                S_paths[:, t] = S_paths[:, t-1] * np.exp(drift + diffusion)
+            
+            if option_type == "call":
+                payoff = np.maximum(S_paths[:, -1] - K, 0.0)
+            else:
+                payoff = np.maximum(K - S_paths[:, -1], 0.0)
+                
+            discounted = np.exp(-r * T) * payoff
+            return float(np.mean(discounted))
         except Exception as e:
-            logger.warning(f"Could not set random seed: {str(e)}")
-            np.random.seed(None)
-        
-        dt = T / num_steps
-        Z = np.random.standard_normal((num_sim, num_steps))
-        S_paths = np.zeros((num_sim, num_steps))
-        S_paths[:, 0] = S
-        
-        for t in range(1, num_steps):
-            drift = (r - q - 0.5 * sigma**2) * dt
-            diffusion = sigma * np.sqrt(dt) * Z[:, t]
-            S_paths[:, t] = S_paths[:, t-1] * np.exp(drift + diffusion)
-        
-        if option_type == "call":
-            payoff = np.maximum(S_paths[:, -1] - K, 0.0)
-        else:
-            payoff = np.maximum(K - S_paths[:, -1], 0.0)
+            logger.error(f"MC fallback pricing failed: {str(e)}")
+            return 0.0  # Never return None
+    
+    def greeks_mc_delta_gamma(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, h=1e-3, use_numba=False):
+        """Robust fallback implementation that never returns None"""
+        try:
+            p_down = price_monte_carlo(S - h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+            p_mid = price_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+            p_up = price_monte_carlo(S + h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
             
-        discounted = np.exp(-r * T) * payoff
-        return float(np.mean(discounted))
-    except Exception as e:
-        logger.error(f"MC fallback pricing failed: {str(e)}", exc_info=True)
-        return 0.0  # Never return None
+            delta = (p_up - p_down) / (2*h)
+            gamma = (p_up - 2*p_mid + p_down) / (h**2)
+            return float(delta), float(gamma)
+        except Exception as e:
+            logger.error(f"Greeks fallback failed: {str(e)}")
+            return 0.5, 0.01  # Never return None
 
-# Fallback implementation for greeks_mc_delta_gamma
-def greeks_mc_delta_gamma(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, h=1e-3, use_numba=False):
-    """Ultimate fallback implementation that never returns None"""
-    try:
-        # Convert all parameters to scalars
-        S = safe_scalar(S)
-        K = safe_scalar(K)
-        T = safe_scalar(T)
-        r = safe_scalar(r)
-        sigma = safe_scalar(sigma)
-        q = safe_scalar(q)
-        
-        # Validate parameters
-        if not validate_parameters(S, K, T, r, sigma, q):
-            return 0.5, 0.01
-            
-        # Apply hard limits
-        num_sim = max(MIN_SIMS, min(num_sim, MAX_SIMS))
-        num_steps = max(MIN_STEPS, min(num_steps, MAX_STEPS))
-        
-        # Use smaller simulation size for Greeks calculation to save resources
-        num_sim_greeks = max(1000, num_sim // 10)
-        
-        p_down = price_monte_carlo(S - h, K, T, r, sigma, option_type, q, 
-                                  num_sim_greeks, num_steps, seed, use_numba)
-        p_mid = price_monte_carlo(S, K, T, r, sigma, option_type, q, 
-                                 num_sim_greeks, num_steps, seed, use_numba)
-        p_up = price_monte_carlo(S + h, K, T, r, sigma, option_type, q, 
-                                num_sim_greeks, num_steps, seed, use_numba)
-        
-        delta = (p_up - p_down) / (2*h)
-        gamma = (p_up - 2*p_mid + p_down) / (h**2)
-        
-        # Handle potential NaN values
-        if np.isnan(delta) or np.isinf(delta):
-            delta = 0.5
-        if np.isnan(gamma) or np.isinf(gamma):
-            gamma = 0.01
-            
-        return float(delta), float(gamma)
-    except Exception as e:
-        logger.error(f"Greeks fallback failed: {str(e)}", exc_info=True)
-        return 0.5, 0.01  # Never return None
-
-# ======================
-# STREAMLIT UI
-# ======================
+# Configure logging
+logger = logging.getLogger("monte_carlo_ml")
 
 # ------------------- PAGE CONFIG -------------------
 st.set_page_config(
@@ -640,152 +254,71 @@ st.markdown("""
     .js-plotly-plot .plotly .ytick {
         font-size: 1rem !important;
     }
-    .diagnostic-box {
-        background-color: #1E293B !important;
-        border-radius: 12px !important;
-        padding: 1.5rem !important;
-        border: 1px solid #334155 !important;
-        margin: 1rem 0 !important;
-    }
-    .diagnostic-title {
-        font-size: 1.4rem !important;
-        color: white !important;
-        margin-bottom: 1rem !important;
-        font-weight: 600 !important;
-    }
-    .diagnostic-content {
-        font-size: 1rem !important;
-        color: #CBD5E1 !important;
-        line-height: 1.5 !important;
-    }
-    .diagnostic-highlight {
-        background-color: #3B82F6 !important;
-        color: white !important;
-        padding: 0.5rem !important;
-        border-radius: 6px !important;
-        font-weight: 500 !important;
-        margin: 0.5rem 0 !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------- HEADER -------------------
 st.markdown('<h1 class="main-header">Monte Carlo ML Surrogate</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Machine learning accelerated option pricing with guaranteed reliability</p>', unsafe_allow_html=True)
-
-# ------------------- DIAGNOSTICS PANEL -------------------
-st.markdown('<div class="diagnostic-box">', unsafe_allow_html=True)
-st.markdown('<h3 class="diagnostic-title">System Diagnostics</h3>', unsafe_allow_html=True)
-
-# Check if ML model is available
-if MonteCarloML is not None:
-    st.markdown('<div class="diagnostic-highlight">✅ ML Surrogate: Available</div>', unsafe_allow_html=True)
-else:
-    st.markdown('<div class="diagnostic-highlight">⚠️ ML Surrogate: Not Available</div>', unsafe_allow_html=True)
-    if ml_import_error:
-        st.markdown('<p class="diagnostic-content">Import Error: ' + ml_import_error + '</p>', unsafe_allow_html=True)
-    
-    # Show detailed troubleshooting information
-    st.markdown('<h4 class="subsection-header">Troubleshooting Information</h4>', unsafe_allow_html=True)
-    st.markdown(f"""
-    - Project Root: {PROJECT_ROOT}
-    - Source Path: {SRC_PATH}
-    - Expected MonteCarloML Path: {MONTE_CARLO_ML_PATH}
-    - Python Path: {sys.path}
-    
-    **To fix this issue**:
-    1. Verify your project structure matches:
-       ```
-       optionslab/
-       ├── src/
-       │   └── pricing_models/
-       │       ├── __init__.py
-       │       ├── monte_carlo.py
-       │       └── monte_carlo_ml.py
-       └── streamlit_app/
-           └── pages/
-               └── 2_MonteCarlo_ML.py
-       ```
-    2. Ensure `requirements.txt` includes:
-       ```
-       scikit-learn
-       numpy
-       pandas
-       ```
-    3. Restart the Streamlit server after making changes
-    """)
-
-# Check if MC pricer is available
-if MonteCarloPricer is not None:
-    st.markdown('<div class="diagnostic-highlight">✅ Monte Carlo Pricer: Available</div>', unsafe_allow_html=True)
-else:
-    st.markdown('<div class="diagnostic-highlight">⚠️ Monte Carlo Pricer: Not Available</div>', unsafe_allow_html=True)
-    if mc_import_error:
-        st.markdown('<p class="diagnostic-content">Import Error: ' + mc_import_error + '</p>', unsafe_allow_html=True)
-
-st.markdown('</div>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Machine learning accelerated option pricing with gradient boosting</p>', unsafe_allow_html=True)
 
 # ------------------- INPUT SECTION -------------------
 st.markdown('<div style="background-color: #1E293B; padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; border: 1px solid #334155;">', unsafe_allow_html=True)
 st.markdown('<h3 class="subsection-header">Model Configuration</h3>', unsafe_allow_html=True)
+
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     st.markdown('<h4 class="metric-label">Simulation Settings</h4>', unsafe_allow_html=True)
     num_sim = st.slider("Simulations (MC target gen)", 10000, 100000, 30000, step=5000, key="sim_ml")
     num_steps = st.slider("Time Steps", 10, 250, 100, step=10, key="steps_ml")
     seed = st.number_input("Random Seed", min_value=1, value=42, step=1, key="seed_ml")
+
 with col2:
     st.markdown('<h4 class="metric-label">Training Grid</h4>', unsafe_allow_html=True)
     n_grid = st.slider("Training points per axis", 5, 25, 10, key="grid_ml")
     s_range = st.slider("Spot (S) range", 50, 200, (80, 120), key="s_range_ml")
     k_range = st.slider("Strike (K) range", 50, 200, (80, 120), key="k_range_ml")
+
 with col3:
     st.markdown('<h4 class="metric-label">Fixed Parameters</h4>', unsafe_allow_html=True)
     t_fixed = st.slider("Time to Maturity (T)", 0.05, 2.0, 1.0, step=0.05, key="t_ml")
     r_fixed = st.slider("Risk-Free Rate (r)", 0.0, 0.15, 0.05, step=0.01, key="r_ml")
     sigma_fixed = st.slider("Volatility (σ)", 0.05, 0.8, 0.20, step=0.01, key="sigma_ml")
     q_fixed = st.slider("Dividend Yield (q)", 0.0, 0.10, 0.0, step=0.01, key="q_ml")
+
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ------------------- PREDICTION INPUTS -------------------
 st.markdown('<div style="background-color: #1E293B; padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; border: 1px solid #334155;">', unsafe_allow_html=True)
 st.markdown('<h3 class="subsection-header">Prediction Inputs</h3>', unsafe_allow_html=True)
+
 col1, col2 = st.columns([1, 1])
 with col1:
     st.markdown('<h4 class="metric-label">Price Parameters</h4>', unsafe_allow_html=True)
     S = st.number_input("Spot Price (S)", min_value=1.0, value=100.0, step=1.0, key="spot_ml")
     K = st.number_input("Strike Price (K)", min_value=1.0, value=100.0, step=1.0, key="strike_ml")
     T = st.number_input("Time to Maturity (T)", min_value=0.01, value=1.0, step=0.01, key="time_ml")
+
 with col2:
     st.markdown('<h4 class="metric-label">Market Parameters</h4>', unsafe_allow_html=True)
     r = st.number_input("Risk-Free Rate (r)", min_value=0.0, value=0.05, step=0.01, format="%.4f", key="rate_ml")
     sigma = st.number_input("Volatility (σ)", min_value=0.001, value=0.2, step=0.01, format="%.4f", key="vol_ml")
     q = st.number_input("Dividend Yield (q)", min_value=0.0, value=0.0, step=0.01, format="%.4f", key="div_ml")
+
 option_type = st.selectbox("Option Type", ["call", "put"], key="option_type_ml")
 train = st.button("Fit Surrogate & Compare", type="primary", use_container_width=True, key="train_ml")
+
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ------------------- MAIN CONTENT -------------------
 if train:
     try:
-        # Check resources before proceeding
-        if not check_resources():
-            st.warning("⚠️ System resources are limited. Consider reducing simulation size or grid points.")
-        
-        # Validate parameters before starting
-        if not validate_parameters(S, K, T, r, sigma, q):
-            st.stop()
-        
         # Progress bar for user feedback
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         # ---------- Build training dataframe on grid ----------
         status_text.text("Generating training grid...")
-        progress_bar.progress(10)
-        
-        # Apply grid size limits
-        n_grid = max(5, min(n_grid, MAX_GRID_SIZE))
+        progress_bar.progress(20)
         
         grid_S = np.linspace(s_range[0], s_range[1], n_grid)
         grid_K = np.linspace(k_range[0], k_range[1], n_grid)
@@ -802,33 +335,13 @@ if train:
         
         # ---------- Initialize models ----------
         status_text.text("Initializing models...")
-        progress_bar.progress(20)
+        progress_bar.progress(40)
         
         mc = get_mc_pricer(num_sim, num_steps, seed)
         ml = get_mc_ml_surrogate(num_sim, num_steps, seed)
         
-        # CRITICAL FIX: Check if ML model is available
         if ml is None:
-            st.warning("""
-            **ML Surrogate Initialization Failed**
-            
-            The ML surrogate model could not be initialized. This typically happens when:
-            - The `MonteCarloML` class is not properly defined
-            - Required dependencies (scikit-learn) are missing
-            - There's an issue with the file structure
-            
-            **Debug Information**:
-            - Project root: {}
-            - Source path: {}
-            - Python path: {}
-            
-            **Solution**:
-            1. Verify your `monte_carlo_ml.py` file matches the expected structure
-            2. Ensure `scikit-learn` is in your requirements.txt
-            3. Check that all dependencies are properly installed
-            4. Restart the Streamlit server after making changes
-            """.format(PROJECT_ROOT, SRC_PATH, sys.path))
-            
+            st.warning("ML surrogate model is not available. Using fallback implementation.")
             # Create a simple fallback model
             class FallbackMLModel:
                 def fit(self, X, y=None):
@@ -836,23 +349,22 @@ if train:
                     if y is None:
                         y = []
                         for _, row in X.iterrows():
-                            # Ensure all parameters are scalars
+                            # CRITICAL FIX: Ensure all parameters are scalars
                             try:
-                                S_val = safe_scalar(row.S)
-                                K_val = safe_scalar(row.K)
-                                T_val = safe_scalar(row.T)
-                                r_val = safe_scalar(row.r)
-                                sigma_val = safe_scalar(row.sigma)
-                                q_val = safe_scalar(row.q)
+                                S_val = _extract_scalar(row.S)
+                                K_val = _extract_scalar(row.K)
+                                T_val = _extract_scalar(row.T)
+                                r_val = _extract_scalar(row.r)
+                                sigma_val = _extract_scalar(row.sigma)
+                                q_val = _extract_scalar(row.q)
                                 
-                                # Use smaller simulation size for training
                                 price = price_monte_carlo(
                                     S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
                                     num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
                                 )
                                 y.append(price)
                             except Exception as e:
-                                logger.error(f"MC pricing failed for row: {row}, error: {str(e)}", exc_info=True)
+                                logger.error(f"MC pricing failed for row: {row}, error: {str(e)}")
                                 y.append(0.0)
                         y = np.array(y)
                     return self
@@ -865,13 +377,13 @@ if train:
                     
                     for _, row in X.iterrows():
                         try:
-                            # Ensure all parameters are scalars
-                            S_val = safe_scalar(row.S)
-                            K_val = safe_scalar(row.K)
-                            T_val = safe_scalar(row.T)
-                            r_val = safe_scalar(row.r)
-                            sigma_val = safe_scalar(row.sigma)
-                            q_val = safe_scalar(row.q)
+                            # CRITICAL FIX: Ensure all parameters are scalars
+                            S_val = _extract_scalar(row.S)
+                            K_val = _extract_scalar(row.K)
+                            T_val = _extract_scalar(row.T)
+                            r_val = _extract_scalar(row.r)
+                            sigma_val = _extract_scalar(row.sigma)
+                            q_val = _extract_scalar(row.q)
                             
                             price = price_monte_carlo(
                                 S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
@@ -887,7 +399,7 @@ if train:
                             deltas.append(delta)
                             gammas.append(gamma)
                         except Exception as e:
-                            logger.error(f"Prediction failed for row: {row}, error: {str(e)}", exc_info=True)
+                            logger.error(f"Prediction failed for row: {row}, error: {str(e)}")
                             prices.append(0.0)
                             deltas.append(0.5)
                             gammas.append(0.01)
@@ -900,38 +412,24 @@ if train:
                     })
             
             ml = FallbackMLModel()
-            st.info("Using fallback ML surrogate implementation based on direct Monte Carlo pricing")
         
         # ---------- Fit model ----------
         status_text.text("Training ML surrogate...")
-        progress_bar.progress(40)
+        progress_bar.progress(60)
         
         # CRITICAL FIX: Ensure df has proper dtypes before fitting
         df_numeric = df.copy()
         for col in df_numeric.columns:
             try:
                 df_numeric[col] = df_numeric[col].astype(float)
-            except Exception as e:
-                logger.warning(f"Could not convert column {col} to float: {str(e)}")
+            except:
+                logger.warning(f"Could not convert column {col} to float")
         
-        # Add timeout protection for model fitting
-        start_time = time.time()
-        
-        try:
-            (_, t_fit_ms) = timeit_ms(ml.fit, df_numeric, None)
-            
-            # Check if fitting took too long
-            if t_fit_ms > MAX_FIT_TIME * 1000:
-                st.warning(f"⚠️ Model fitting took {t_fit_ms/1000:.1f} seconds (limit: {MAX_FIT_TIME} seconds). "
-                          "Consider reducing grid size.")
-        except Exception as e:
-            logger.error(f"Model fitting failed: {str(e)}", exc_info=True)
-            st.error("Failed to train ML surrogate model. Using fallback implementation.")
-            t_fit_ms = 0.0
+        (_, t_fit_ms) = timeit_ms(ml.fit, df_numeric, None)
         
         # ---------- Predict single point ----------
         status_text.text("Generating predictions...")
-        progress_bar.progress(60)
+        progress_bar.progress(80)
         
         x_single = pd.DataFrame([{
             "S": S, "K": K, "T": T, "r": r, "sigma": sigma, "q": q
@@ -944,8 +442,7 @@ if train:
                 S, K, T, r, sigma, option_type, q,
                 num_sim=num_sim, num_steps=num_steps, seed=seed
             )
-        except Exception as e:
-            logger.error(f"MC pricing failed: {str(e)}", exc_info=True)
+        except:
             price_mc = 0.0
             t_mc_ms = 0.0
         
@@ -957,13 +454,8 @@ if train:
             price_ml = pred_df["price"].iloc[0] if "price" in pred_df and not pd.isna(pred_df["price"].iloc[0]) else 0.0
             delta_ml = pred_df["delta"].iloc[0] if "delta" in pred_df and not pd.isna(pred_df["delta"].iloc[0]) else 0.5
             gamma_ml = pred_df["gamma"].iloc[0] if "gamma" in pred_df and not pd.isna(pred_df["gamma"].iloc[0]) else 0.01
-            
-            # Ensure values are valid floats
-            price_ml = safe_scalar(price_ml)
-            delta_ml = safe_scalar(delta_ml)
-            gamma_ml = safe_scalar(gamma_ml)
         except Exception as e:
-            logger.error(f"ML prediction failed: {str(e)}", exc_info=True)
+            logger.error(f"ML prediction failed: {str(e)}")
             price_ml = 0.0
             delta_ml = 0.5
             gamma_ml = 0.01
@@ -976,10 +468,11 @@ if train:
         
         # ---------- Metrics Display ----------
         status_text.text("Generating visualizations...")
-        progress_bar.progress(80)
+        progress_bar.progress(90)
         
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         col1, col2, col3, col4 = st.columns(4)
+        
         col1.markdown('<div class="metric-label">MC Price</div>', unsafe_allow_html=True)
         col1.markdown(f'<div class="metric-value">${price_mc:.6f}</div>', unsafe_allow_html=True)
         col1.markdown(f'<div class="metric-delta">{t_mc_ms:.1f} ms | {num_sim:,} paths</div>', unsafe_allow_html=True)
@@ -995,34 +488,33 @@ if train:
         col4.markdown('<div class="metric-label">ML Gamma</div>', unsafe_allow_html=True)
         col4.markdown(f'<div class="metric-value">{gamma_ml:.6f}</div>', unsafe_allow_html=True)
         col4.markdown(f'<div class="metric-delta">Error: {gamma_error:.6f}</div>', unsafe_allow_html=True)
+        
         st.markdown('</div>', unsafe_allow_html=True)
         
         # ---------- Generate predictions for grid ----------
         status_text.text("Analyzing model performance...")
-        progress_bar.progress(90)
+        progress_bar.progress(95)
         
         # Compare MC vs ML on grid for price only (calls)
         prices_mc = []
         for _, row in df.iterrows():
             try:
-                # Ensure all parameters are scalars
-                S_val = safe_scalar(row.S)
-                K_val = safe_scalar(row.K)
-                T_val = safe_scalar(row.T)
-                r_val = safe_scalar(row.r)
-                sigma_val = safe_scalar(row.sigma)
-                q_val = safe_scalar(row.q)
+                # CRITICAL FIX: Ensure all parameters are scalars
+                S_val = _extract_scalar(row.S)
+                K_val = _extract_scalar(row.K)
+                T_val = _extract_scalar(row.T)
+                r_val = _extract_scalar(row.r)
+                sigma_val = _extract_scalar(row.sigma)
+                q_val = _extract_scalar(row.q)
                 
-                # Use smaller simulation size for grid analysis
                 price = price_monte_carlo(
                     S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
                     num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
                 )
                 prices_mc.append(price)
             except Exception as e:
-                logger.error(f"MC pricing failed for row: {row}, error: {str(e)}", exc_info=True)
+                logger.error(f"MC pricing failed for row: {row}, error: {str(e)}")
                 prices_mc.append(0.0)
-        
         prices_mc = np.array(prices_mc)
         
         try:
@@ -1037,7 +529,7 @@ if train:
                 # CRITICAL FIX: Convert to numpy array and handle NaNs
                 prices_ml = np.nan_to_num(preds["price"].values, nan=0.0)
         except Exception as e:
-            logger.error(f"ML prediction failed: {str(e)}", exc_info=True)
+            logger.error(f"ML prediction failed: {str(e)}")
             prices_ml = np.zeros(len(df))
         
         # CRITICAL FIX: Ensure arrays are valid before subtraction
@@ -1050,7 +542,7 @@ if train:
         try:
             err_price = (prices_ml - prices_mc).reshape(Sg.shape)
         except Exception as e:
-            logger.error(f"Error reshaping price difference: {str(e)}", exc_info=True)
+            logger.error(f"Error reshaping price difference: {str(e)}")
             # Fallback: create a zero error grid
             err_price = np.zeros(Sg.shape)
         
@@ -1096,6 +588,7 @@ if train:
             
             # Create comparison chart
             fig_comparison = go.Figure()
+            
             # Add price comparison
             fig_comparison.add_trace(go.Bar(
                 x=["Monte Carlo", "ML Surrogate"],
@@ -1104,6 +597,7 @@ if train:
                 marker_color=['#3B82F6', '#10B981'],
                 width=0.6
             ))
+            
             # Add error line
             fig_comparison.add_shape(
                 type="line",
@@ -1112,6 +606,7 @@ if train:
                 line=dict(color="#F87171", width=2, dash="dash"),
                 name="MC Reference"
             )
+            
             fig_comparison.update_layout(
                 title_font_size=20,
                 xaxis_title="",
@@ -1123,10 +618,12 @@ if train:
                 font=dict(size=14),
                 showlegend=False
             )
+            
             st.plotly_chart(fig_comparison, use_container_width=True)
             
             # Add metrics table
             st.markdown('<h3 class="subsection-header">Prediction Metrics</h3>', unsafe_allow_html=True)
+            
             metrics_df = pd.DataFrame({
                 "Metric": ["Price", "Delta", "Gamma"],
                 "Monte Carlo": [
@@ -1145,6 +642,7 @@ if train:
                     f"{gamma_error:.6f}"
                 ]
             })
+            
             st.dataframe(
                 metrics_df.style.format({
                     "Price Error": "{:.6f}",
@@ -1163,6 +661,7 @@ if train:
             - **Training Grid**: {n_grid}×{n_grid} points
             - **Fixed Parameters**: T={t_fixed:.2f}, r={r_fixed:.2f}, σ={sigma_fixed:.2f}, q={q_fixed:.2f}
             - **Training Range**: S=[{s_range[0]}, {s_range[1]}], K=[{k_range[0]}, {k_range[1]}]
+            
             **Model Performance**:
             - **Mean Absolute Error**: {mean_abs_error:.6f}
             - **Max Absolute Error**: {max_abs_error:.6f}
@@ -1183,12 +682,14 @@ if train:
                 zmid=0,
                 colorbar=dict(title="Error", titleside="right")
             ))
+            
             fig_heatmap.add_trace(go.Scatter(
                 x=[S], y=[K],
                 mode='markers',
                 marker=dict(size=15, color='yellow', symbol='star', line=dict(width=2, color='white')),
                 name='Prediction Point'
             ))
+            
             fig_heatmap.update_layout(
                 title_font_size=20,
                 xaxis_title="Spot Price (S)",
@@ -1199,9 +700,11 @@ if train:
                 plot_bgcolor='rgba(15,23,42,1)',
                 font=dict(size=14)
             )
+            
             st.plotly_chart(fig_heatmap, use_container_width=True)
             
             st.markdown('<h3 class="subsection-header">Error Distribution</h3>', unsafe_allow_html=True)
+            
             # Create error distribution chart
             fig_error_dist = go.Figure()
             fig_error_dist.add_trace(go.Histogram(
@@ -1211,12 +714,14 @@ if train:
                 marker_color='#60A5FA',
                 opacity=0.7
             ))
+            
             fig_error_dist.add_vline(
                 x=0, 
                 line_dash="dash", 
                 line_color="#F87171",
                 annotation_text="Zero Error"
             )
+            
             fig_error_dist.update_layout(
                 title_font_size=20,
                 xaxis_title="ML - MC Price Error",
@@ -1227,10 +732,12 @@ if train:
                 plot_bgcolor='rgba(15,23,42,1)',
                 font=dict(size=14)
             )
+            
             st.plotly_chart(fig_error_dist, use_container_width=True)
             
             # Error metrics
             st.markdown('<h3 class="subsection-header">Error Statistics</h3>', unsafe_allow_html=True)
+            
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Mean Absolute Error", f"{mean_abs_error:.6f}")
             col2.metric("Max Absolute Error", f"{max_abs_error:.6f}")
@@ -1252,6 +759,7 @@ if train:
             
             # Analyze error sensitivity to S
             st.markdown('<h3 class="subsection-header">Error vs Spot Price (S)</h3>', unsafe_allow_html=True)
+            
             # Calculate average error by S value
             s_errors = []
             s_values = []
@@ -1271,12 +779,14 @@ if train:
                     line=dict(color='#3B82F6', width=3),
                     marker=dict(size=8, color='#3B82F6')
                 ))
+                
                 fig_sensitivity_s.add_vline(
                     x=S, 
                     line_dash="dash", 
                     line_color="#F87171",
                     annotation_text=f"Current S: {S}"
                 )
+                
                 fig_sensitivity_s.update_layout(
                     title_font_size=20,
                     xaxis_title="Spot Price (S)",
@@ -1287,12 +797,14 @@ if train:
                     plot_bgcolor='rgba(15,23,42,1)',
                     font=dict(size=14)
                 )
+                
                 st.plotly_chart(fig_sensitivity_s, use_container_width=True)
             else:
                 st.warning("No valid data points for S sensitivity analysis")
             
             # Analyze error sensitivity to K
             st.markdown('<h3 class="subsection-header">Error vs Strike Price (K)</h3>', unsafe_allow_html=True)
+            
             # Calculate average error by K value
             k_errors = []
             k_values = []
@@ -1312,12 +824,14 @@ if train:
                     line=dict(color='#3B82F6', width=3),
                     marker=dict(size=8, color='#3B82F6')
                 ))
+                
                 fig_sensitivity_k.add_vline(
                     x=K, 
                     line_dash="dash", 
                     line_color="#F87171",
                     annotation_text=f"Current K: {K}"
                 )
+                
                 fig_sensitivity_k.update_layout(
                     title_font_size=20,
                     xaxis_title="Strike Price (K)",
@@ -1328,12 +842,14 @@ if train:
                     plot_bgcolor='rgba(15,23,42,1)',
                     font=dict(size=14)
                 )
+                
                 st.plotly_chart(fig_sensitivity_k, use_container_width=True)
             else:
                 st.warning("No valid data points for K sensitivity analysis")
             
             # Moneyness analysis
             st.markdown('<h3 class="subsection-header">Error vs Moneyness (S/K)</h3>', unsafe_allow_html=True)
+            
             moneyness = df["S"] / df["K"]
             fig_moneyness = go.Figure()
             fig_moneyness.add_trace(go.Scatter(
@@ -1348,9 +864,11 @@ if train:
                 ),
                 opacity=0.7
             ))
+            
             # Add current moneyness
             current_moneyness = S / K
             current_error = abs(price_mc - price_ml)
+            
             fig_moneyness.add_trace(go.Scatter(
                 x=[current_moneyness],
                 y=[current_error],
@@ -1358,6 +876,7 @@ if train:
                 marker=dict(size=15, color='red', symbol='star'),
                 name=f'Current: S/K={current_moneyness:.2f}'
             ))
+            
             fig_moneyness.update_layout(
                 title_font_size=20,
                 xaxis_title="Moneyness (S/K)",
@@ -1368,6 +887,7 @@ if train:
                 plot_bgcolor='rgba(15,23,42,1)',
                 font=dict(size=14)
             )
+            
             st.plotly_chart(fig_moneyness, use_container_width=True)
             
             st.markdown("""
@@ -1385,6 +905,7 @@ if train:
             
             # Speed comparison
             st.markdown('<h3 class="subsection-header">Speed Comparison</h3>', unsafe_allow_html=True)
+            
             fig_speed = go.Figure()
             fig_speed.add_trace(go.Bar(
                 x=["Monte Carlo", "ML Surrogate"],
@@ -1392,6 +913,7 @@ if train:
                 marker_color=['#3B82F6', '#10B981'],
                 width=0.6
             ))
+            
             fig_speed.update_layout(
                 title_font_size=20,
                 xaxis_title="",
@@ -1403,12 +925,14 @@ if train:
                 plot_bgcolor='rgba(15,23,42,1)',
                 font=dict(size=14)
             )
+            
             st.plotly_chart(fig_speed, use_container_width=True)
             
             st.markdown(f"""
             - **Monte Carlo**: {t_mc_ms:.1f} ms for {num_sim:,} paths
             - **ML Surrogate**: {t_ml_ms:.3f} ms (approximately {int(t_mc_ms/t_ml_ms):,}x faster)
             - **Speedup Factor**: {t_mc_ms/t_ml_ms:.1f}x
+            
             **Note**: The speed advantage of the ML surrogate becomes more pronounced with:
             - Larger number of predictions
             - More complex option structures
@@ -1417,12 +941,14 @@ if train:
             
             # Accuracy vs Speed tradeoff
             st.markdown('<h3 class="subsection-header">Accuracy-Speed Tradeoff</h3>', unsafe_allow_html=True)
+            
             # Create sample data for different MC simulation sizes
             mc_sizes = [5000, 10000, 20000, 50000, 100000]
             mc_times = [t_mc_ms * (size/num_sim) for size in mc_sizes]
             mc_errors = [0.025, 0.018, 0.012, 0.008, 0.005]  # Approximate error rates
             
             fig_tradeoff = go.Figure()
+            
             # Add MC points
             fig_tradeoff.add_trace(go.Scatter(
                 x=mc_times,
@@ -1432,6 +958,7 @@ if train:
                 line=dict(color='#3B82F6', width=3),
                 marker=dict(size=10)
             ))
+            
             # Add ML point
             fig_tradeoff.add_trace(go.Scatter(
                 x=[t_ml_ms],
@@ -1440,6 +967,7 @@ if train:
                 name='ML Surrogate',
                 marker=dict(size=15, color='#10B981', symbol='star')
             ))
+            
             fig_tradeoff.update_layout(
                 title_font_size=20,
                 xaxis_title="Execution Time (ms)",
@@ -1451,6 +979,7 @@ if train:
                 font=dict(size=14),
                 xaxis_type="log"
             )
+            
             st.plotly_chart(fig_tradeoff, use_container_width=True)
             
             st.markdown("""
@@ -1462,62 +991,27 @@ if train:
             """)
     
     except Exception as e:
-        logger.error(f"Critical error during ML surrogate analysis: {str(e)}", exc_info=True)
-        st.error(f"Critical error during analysis: {str(e)}")
-        
+        st.error(f"Critical error during ML surrogate analysis: {str(e)}")
+        logger.exception("Critical ML surrogate failure")
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
         st.markdown("### Analysis Failed")
         st.markdown(f"""
         An error occurred during the ML surrogate analysis:
+        
         **{str(e)}**
+        
         Possible causes:
         - ML model not properly configured
         - Insufficient memory for training
         - Invalid parameter combinations
+        
         Try:
         1. Reducing the training grid size
         2. Checking all input values are valid
         3. Using simpler model configurations
         """)
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Add detailed diagnostics
-        st.markdown('<div class="diagnostic-box">', unsafe_allow_html=True)
-        st.markdown('<h3 class="diagnostic-title">Detailed Diagnostics</h3>', unsafe_allow_html=True)
-        st.markdown(f"""
-        **System Information**:
-        - Project Root: {PROJECT_ROOT}
-        - Source Path: {SRC_PATH}
-        - Python Path: {sys.path}
-        - ML Model Available: {MonteCarloML is not None}
-        - MC Pricer Available: {MonteCarloPricer is not None}
-        
-        **Import Errors**:
-        - ML Import Error: {ml_import_error if ml_import_error else "None"}
-        - MC Import Error: {mc_import_error if mc_import_error else "None"}
-        
-        **Suggested Solutions**:
-        1. Verify your project structure matches:
-           ```
-           optionslab/
-           ├── src/
-           │   └── pricing_models/
-           │       ├── __init__.py
-           │       ├── monte_carlo.py
-           │       └── monte_carlo_ml.py
-           └── streamlit_app/
-               └── pages/
-                   └── 2_MonteCarlo_ML.py
-           ```
-        2. Ensure `requirements.txt` includes:
-           ```
-           scikit-learn
-           numpy
-           pandas
-           ```
-        3. Restart the Streamlit server after making changes
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
+
 else:
     st.markdown('<div style="text-align: center; padding: 3rem 0;">', unsafe_allow_html=True)
     st.markdown("### Ready to Analyze")
@@ -1525,3 +1019,4 @@ else:
     st.image("https://images.unsplash.com/photo-1551288049-bebda4e38f71?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80", 
              use_column_width=True, caption="Machine learning surrogates accelerate Monte Carlo pricing while maintaining accuracy")
     st.markdown('</div>', unsafe_allow_html=True)
+
