@@ -12,7 +12,21 @@ import time
 import traceback
 import os
 from typing import Any, Dict, Tuple, Optional, Callable, Union, List
-import psutil  # Added for resource monitoring
+
+# ======================
+# OPTIONAL DEPENDENCY HANDLING
+# ======================
+
+# Try to import psutil for resource monitoring, but don't fail if unavailable
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+    logger = logging.getLogger("option_pricer.mc_ml")
+    logger.info("psutil module available for resource monitoring")
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    logger = logging.getLogger("option_pricer.mc_ml")
+    logger.warning("psutil module not available. Resource monitoring disabled.")
 
 # ======================
 # PRODUCTION SETUP
@@ -29,6 +43,7 @@ logger.info("Initializing Monte Carlo ML Surrogate module")
 
 # Global constants for production
 MAX_MEMORY_PCT = 75  # Maximum memory usage percentage
+MIN_MEMORY_AVAIL = 500 * 1024 * 1024  # 500 MB minimum available memory
 MAX_SIMS = 100000    # Hard cap on simulations
 MIN_SIMS = 1000      # Minimum viable simulations
 MAX_STEPS = 250      # Maximum time steps
@@ -82,8 +97,13 @@ def check_resources() -> bool:
     """
     Check if system resources are sufficient to run computations.
     Returns True if resources are sufficient, False otherwise.
+    Gracefully handles missing psutil module.
     """
     try:
+        if not PSUTIL_AVAILABLE:
+            # If psutil isn't available, assume resources are sufficient
+            return True
+            
         # Check memory usage
         memory = psutil.virtual_memory()
         if memory.percent > MAX_MEMORY_PCT:
@@ -92,7 +112,7 @@ def check_resources() -> bool:
             return False
             
         # Check available memory
-        if memory.available < 500 * 1024 * 1024:  # 500 MB
+        if memory.available < MIN_MEMORY_AVAIL:
             st.warning("⚠️ Low available memory. Performance may be degraded.")
             return False
             
