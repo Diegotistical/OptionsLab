@@ -9,21 +9,133 @@ import logging
 import plotly.graph_objects as go
 import plotly.subplots as sp
 import time
-# Import from utils - CRITICAL FIX FOR STREAMLIT CLOUD
-try:
-    from streamlit_app.st_utils import (
-        get_mc_pricer,
-        get_mc_ml_surrogate,
-        timeit_ms,
-        price_monte_carlo,
-        greeks_mc_delta_gamma,
-        _extract_scalar
-    )
-    logger = logging.getLogger("monte_carlo_ml")
-    logger.info("Successfully imported from st_utils")
-except Exception as e:
-    logger = logging.getLogger("monte_carlo_ml")
-    logger.error(f"Failed to import from st_utils: {str(e)}")
+
+# ======================
+# PATH DIAGNOSTICS
+# ======================
+logger = logging.getLogger("monte_carlo_ml")
+logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler())
+
+# Log critical path information for debugging
+logger.info(f"Current working directory: {Path.cwd()}")
+logger.info(f"sys.path: {sys.path}")
+
+# Check for critical directories
+critical_dirs = [
+    Path("/mount/src/optionslab"),
+    Path.cwd(),
+    Path.cwd() / "src",
+    Path.cwd() / "streamlit_app",
+    Path.cwd() / "pricing_models"
+]
+
+for dir_path in critical_dirs:
+    exists = "exists" if dir_path.exists() else "does NOT exist"
+    logger.info(f"Checking {dir_path}: {exists}")
+    if dir_path.exists():
+        logger.info(f"Contents of {dir_path}: {list(dir_path.iterdir())}")
+
+# ======================
+# ROBUST IMPORT STRATEGY
+# ======================
+def import_st_utils():
+    """Robust import strategy for st_utils module with multiple fallbacks"""
+    # Strategy 1: Direct import from streamlit_app (standard structure)
+    try:
+        from streamlit_app.st_utils import (
+            get_mc_pricer,
+            get_mc_ml_surrogate,
+            timeit_ms,
+            price_monte_carlo,
+            greeks_mc_delta_gamma,
+            _extract_scalar
+        )
+        logger.info("Successfully imported from streamlit_app.st_utils")
+        return {
+            "get_mc_pricer": get_mc_pricer,
+            "get_mc_ml_surrogate": get_mc_ml_surrogate,
+            "timeit_ms": timeit_ms,
+            "price_monte_carlo": price_monte_carlo,
+            "greeks_mc_delta_gamma": greeks_mc_delta_gamma,
+            "_extract_scalar": _extract_scalar
+        }
+    except ImportError as e:
+        logger.warning(f"Direct import failed: {str(e)}")
+    
+    # Strategy 2: Import from current directory structure
+    try:
+        # Try to find st_utils.py in parent directories
+        current_file = Path(__file__).resolve()
+        for i in range(5):  # Check up to 5 levels up
+            parent = current_file.parents[i]
+            st_utils_path = parent / "st_utils.py"
+            if st_utils_path.exists():
+                logger.info(f"Found st_utils.py at: {st_utils_path}")
+                
+                # Add parent directory to sys.path
+                if str(parent) not in sys.path:
+                    sys.path.insert(0, str(parent))
+                    logger.info(f"Added {parent} to sys.path")
+                
+                # Now try the import again
+                from st_utils import (
+                    get_mc_pricer,
+                    get_mc_ml_surrogate,
+                    timeit_ms,
+                    price_monte_carlo,
+                    greeks_mc_delta_gamma,
+                    _extract_scalar
+                )
+                logger.info("Successfully imported from st_utils after path adjustment")
+                return {
+                    "get_mc_pricer": get_mc_pricer,
+                    "get_mc_ml_surrogate": get_mc_ml_surrogate,
+                    "timeit_ms": timeit_ms,
+                    "price_monte_carlo": price_monte_carlo,
+                    "greeks_mc_delta_gamma": greeks_mc_delta_gamma,
+                    "_extract_scalar": _extract_scalar
+                }
+    except ImportError as e:
+        logger.warning(f"Parent directory import failed: {str(e)}")
+    
+    # Strategy 3: Streamlit Cloud specific path
+    try:
+        cloud_root = Path("/mount/src/optionslab")
+        if cloud_root.exists():
+            st_utils_path = cloud_root / "st_utils.py"
+            if st_utils_path.exists():
+                logger.info(f"Found st_utils.py at: {st_utils_path}")
+                
+                # Add cloud root to sys.path
+                if str(cloud_root) not in sys.path:
+                    sys.path.insert(0, str(cloud_root))
+                    logger.info(f"Added {cloud_root} to sys.path")
+                
+                # Now try the import again
+                from st_utils import (
+                    get_mc_pricer,
+                    get_mc_ml_surrogate,
+                    timeit_ms,
+                    price_monte_carlo,
+                    greeks_mc_delta_gamma,
+                    _extract_scalar
+                )
+                logger.info("Successfully imported from st_utils for Streamlit Cloud")
+                return {
+                    "get_mc_pricer": get_mc_pricer,
+                    "get_mc_ml_surrogate": get_mc_ml_surrogate,
+                    "timeit_ms": timeit_ms,
+                    "price_monte_carlo": price_monte_carlo,
+                    "greeks_mc_delta_gamma": greeks_mc_delta_gamma,
+                    "_extract_scalar": _extract_scalar
+                }
+    except ImportError as e:
+        logger.warning(f"Streamlit Cloud import failed: {str(e)}")
+    
+    # Strategy 4: Final fallback - create our own implementations
+    logger.error("All import strategies failed. Using comprehensive fallback implementation.")
+    
     # Helper function to extract scalar values
     def _extract_scalar(value):
         if isinstance(value, pd.Series) and len(value) == 1:
@@ -33,18 +145,22 @@ except Exception as e:
         elif isinstance(value, (np.ndarray, list)):
             return float(np.mean(value))
         return float(value)
+    
     # Fallback implementation if imports fail
     def get_mc_pricer(num_sim, num_steps, seed):
         logger.warning("MC pricer not available. Using fallback.")
         return None
+    
     def get_mc_ml_surrogate(num_sim, num_steps, seed):
         logger.warning("ML surrogate not available. Using fallback implementation.")
         return None
+    
     def timeit_ms(fn, *args, **kwargs):
         start = time.perf_counter()
         out = fn(*args, **kwargs)
         dt_ms = (time.perf_counter() - start) * 1000.0
         return out, dt_ms
+    
     def price_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, use_numba=False):
         """Robust fallback implementation that never returns None"""
         try:
@@ -73,6 +189,7 @@ except Exception as e:
         except Exception as e:
             logger.error(f"MC fallback pricing failed: {str(e)}")
             return 0.0  # Never return None
+    
     def greeks_mc_delta_gamma(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, h=1e-3, use_numba=False):
         """Robust fallback implementation that never returns None"""
         try:
@@ -85,8 +202,29 @@ except Exception as e:
         except Exception as e:
             logger.error(f"Greeks fallback failed: {str(e)}")
             return 0.5, 0.01  # Never return None
-# Configure logging
-logger = logging.getLogger("monte_carlo_ml")
+    
+    return {
+        "get_mc_pricer": get_mc_pricer,
+        "get_mc_ml_surrogate": get_mc_ml_surrogate,
+        "timeit_ms": timeit_ms,
+        "price_monte_carlo": price_monte_carlo,
+        "greeks_mc_delta_gamma": greeks_mc_delta_gamma,
+        "_extract_scalar": _extract_scalar
+    }
+
+# ======================
+# EXECUTE IMPORT STRATEGY
+# ======================
+st_utils = import_st_utils()
+
+# Extract the functions we need
+get_mc_pricer = st_utils["get_mc_pricer"]
+get_mc_ml_surrogate = st_utils["get_mc_ml_surrogate"]
+timeit_ms = st_utils["timeit_ms"]
+price_monte_carlo = st_utils["price_monte_carlo"]
+greeks_mc_delta_gamma = st_utils["greeks_mc_delta_gamma"]
+_extract_scalar = st_utils["_extract_scalar"]
+
 # ------------------- PAGE CONFIG -------------------
 st.set_page_config(
     page_title="Monte Carlo ML Surrogate",
