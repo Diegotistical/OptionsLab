@@ -1,22 +1,15 @@
 """
-Monte Carlo ML Surrogate Pricing Interface - DEBUG MODE
-=====================================================
+Monte Carlo ML Surrogate Pricing Interface - PRODUCTION FIX
+==========================================================
 
-This debug version provides detailed diagnostics for the ML surrogate implementation.
-It includes:
-- Comprehensive import diagnostics
-- Detailed error tracing
-- Parameter validation
-- Robust fallback implementation
-- Memory usage monitoring
-- Step-by-step execution logging
+This version fixes the critical Streamlit Cloud compatibility issue while maintaining
+all debugging capabilities. Key changes:
 
-Critical Fixes Applied:
-1. Corrected import path resolution for ML components
-2. Added comprehensive parameter validation
-3. Fixed shape mismatch issues in fallback implementation
-4. Added memory monitoring to prevent OOM errors
-5. Implemented proper error containment with diagnostics
+1. Removed psutil dependency (not available in Streamlit Cloud)
+2. Replaced memory monitoring with lightweight alternative
+3. Maintained all critical path resolution fixes
+4. Preserved comprehensive error diagnostics
+5. Kept robust fallback implementation
 """
 
 import sys
@@ -28,7 +21,6 @@ import logging
 import plotly.graph_objects as go
 import plotly.subplots as sp
 import time
-import psutil
 import traceback
 from typing import Dict, Tuple, Optional, Any, List
 
@@ -377,19 +369,17 @@ except Exception as e:
         return None
 
 # ======================
-# MEMORY MONITORING
+# MEMORY MONITORING (LIGHTWEIGHT)
 # ======================
 def check_memory() -> bool:
-    """Check available memory and warn if low"""
-    mem = psutil.virtual_memory()
-    free_gb = mem.available / (1024 ** 3)
-    total_gb = mem.total / (1024 ** 3)
+    """Lightweight memory check compatible with Streamlit Cloud"""
+    debug_log("MemoryWarning: Checking memory usage (lightweight method)", "info")
     
-    debug_log(f"MemoryWarning: System memory - Total: {total_gb:.2f}GB, Available: {free_gb:.2f}GB", "info")
-    
-    if free_gb < 1.0:
-        debug_log("MemoryWarning: Low memory available (<1GB). This may cause OOM errors.", "warning")
-        st.warning("⚠️ Low system memory detected. Performance may be degraded.")
+    # Simple memory warning based on training grid size
+    grid_size = n_grid * n_grid
+    if grid_size > 400:  # 20x20 grid
+        debug_log("MemoryWarning: Large training grid detected. This may cause memory issues.", "warning")
+        st.warning("⚠️ Large training grid detected. Performance may be degraded.")
         return False
     return True
 
@@ -397,7 +387,7 @@ def check_memory() -> bool:
 # STREAMLIT CONFIGURATION
 # ======================
 st.set_page_config(
-    page_title="ML-Accelerated Option Pricing (DEBUG)",
+    page_title="ML-Accelerated Option Pricing (PRODUCTION)",
     layout="wide",
     page_icon="🔍",
     initial_sidebar_state="collapsed"
@@ -528,16 +518,16 @@ st.markdown("""
 # DEBUG UI ELEMENTS
 # ======================
 st.markdown('<div class="debug-header">', unsafe_allow_html=True)
-st.markdown('<h3 style="color: var(--gold); margin: 0;">DEBUG MODE ACTIVE</h3>', unsafe_allow_html=True)
-st.markdown('<p style="color: var(--silver); margin: 0.5rem 0 0 0;">Detailed diagnostics for ML surrogate implementation</p>', unsafe_allow_html=True)
+st.markdown('<h3 style="color: var(--gold); margin: 0;">PRODUCTION MODE</h3>', unsafe_allow_html=True)
+st.markdown('<p style="color: var(--silver); margin: 0.5rem 0 0 0;">Streamlit Cloud compatible implementation</p>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-debug_log("Debug mode initialized successfully", "info")
+debug_log("Production mode initialized successfully (Streamlit Cloud compatible)", "info")
 
 # ======================
 # MAIN APPLICATION
 # ======================
-st.markdown('<h1 class="main-header">Monte Carlo ML Surrogate (DEBUG)</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">Monte Carlo ML Surrogate</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Machine learning accelerated option pricing with gradient boosting</p>', unsafe_allow_html=True)
 
 # ------------------- INPUT SECTION -------------------
@@ -615,10 +605,10 @@ update_debug_ui()
 # ------------------- MAIN CONTENT -------------------
 if train:
     try:
-        # Memory check
+        # Memory check (lightweight version)
         if not check_memory():
-            st.warning("⚠️ Low memory detected. Consider reducing grid size or simulation count.")
-            debug_log("MemoryWarning: Low memory detected before analysis", "warning")
+            st.warning("⚠️ Large training grid detected. Consider reducing grid size.")
+            debug_log("MemoryWarning: Large grid detected before analysis", "warning")
         
         # Progress bar for user feedback
         progress_bar = st.progress(0)
@@ -1409,7 +1399,7 @@ if train:
         
         Possible causes:
         - ML model not properly configured
-        - Insufficient memory for training
+        - Large training grid causing memory issues
         - Invalid parameter combinations
         
         Try:
