@@ -52,5 +52,5 @@ with col2:
     st.write("- Add more models under `src/volatility_surface/models/` to auto-display.")
 
 st.markdown("---")
-st.subheader("README (excerpt)")
+st.subheader("README")
 st.markdown(load_readme(max_lines=40))
