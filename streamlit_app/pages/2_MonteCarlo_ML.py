@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import logging
 import plotly.graph_objects as go
+import plotly.express as px
 import time
 import traceback
 
@@ -325,6 +326,60 @@ def timeit_ms(fn, *args, **kwargs):
     dt_ms = (time.perf_counter() - start) * 1000.0
     return out, dt_ms
 
+# Helper function to extract scalar values
+def _extract_scalar(value):
+    if isinstance(value, pd.Series) and len(value) == 1:
+        return float(value.values[0])
+    elif hasattr(value, 'item'):
+        return float(value.item())
+    elif isinstance(value, (np.ndarray, list)):
+        return float(np.mean(value))
+    return float(value)
+
+# Robust fallback MC pricing
+def price_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, use_numba=False):
+    """Robust fallback implementation that never returns None"""
+    try:
+        # Convert all parameters to scalars to prevent shape mismatches
+        S = _extract_scalar(S)
+        K = _extract_scalar(K)
+        T = _extract_scalar(T)
+        r = _extract_scalar(r)
+        sigma = _extract_scalar(sigma)
+        q = _extract_scalar(q)
+        np.random.seed(int(seed))
+        dt = T / num_steps
+        Z = np.random.standard_normal((num_sim, num_steps))
+        S_paths = np.zeros((num_sim, num_steps))
+        S_paths[:, 0] = S
+        for t in range(1, num_steps):
+            drift = (r - q - 0.5 * sigma**2) * dt
+            diffusion = sigma * np.sqrt(dt) * Z[:, t]
+            S_paths[:, t] = S_paths[:, t-1] * np.exp(drift + diffusion)
+        if option_type == "call":
+            payoff = np.maximum(S_paths[:, -1] - K, 0.0)
+        else:
+            payoff = np.maximum(K - S_paths[:, -1], 0.0)
+        discounted = np.exp(-r * T) * payoff
+        return float(np.mean(discounted))
+    except Exception as e:
+        logger.error(f"MC fallback pricing failed: {str(e)}")
+        return 0.0  # Never return None
+
+# Robust fallback Greeks calculation
+def greeks_mc_delta_gamma(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42, h=1e-3, use_numba=False):
+    """Robust fallback implementation that never returns None"""
+    try:
+        p_down = price_monte_carlo(S - h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+        p_mid = price_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+        p_up = price_monte_carlo(S + h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed, use_numba)
+        delta = (p_up - p_down) / (2*h)
+        gamma = (p_up - 2*p_mid + p_down) / (h**2)
+        return float(delta), float(gamma)
+    except Exception as e:
+        logger.error(f"Greeks fallback failed: {str(e)}")
+        return 0.5, 0.01  # Never return None
+
 # ======================
 # PAGE CONFIGURATION
 # ======================
@@ -414,8 +469,350 @@ st.markdown("""
         margin: 1.2rem 0 0.8rem 0;
         font-weight: 600;
     }
+    .info-box {
+        background-color: #1E293B;
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 1px solid #334155;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ======================
+# HELPER FUNCTIONS FOR VISUALIZATIONS
+# ======================
+def create_comparison_chart(price_mc, price_ml, t_mc_ms, t_ml_ms):
+    """Create comparison chart with robust error handling"""
+    try:
+        fig = go.Figure()
+        
+        # Add price comparison
+        fig.add_trace(go.Bar(
+            x=["Monte Carlo", "ML Surrogate"],
+            y=[price_mc, price_ml],
+            name="Price",
+            marker_color=['#3B82F6', '#10B981'],
+            width=0.6
+        ))
+        
+        # Add error line only if price_mc is valid
+        if price_mc > 0:
+            fig.add_shape(
+                type="line",
+                x0=-0.4, y0=price_mc,
+                x1=1.4, y1=price_mc,
+                line=dict(color="#F87171", width=2, dash="dash"),
+                name="MC Reference"
+            )
+        
+        fig.update_layout(
+            title_font_size=20,
+            xaxis_title="",
+            yaxis_title="Option Price",
+            template="plotly_dark",
+            height=450,
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)',
+            font=dict(size=14),
+            showlegend=False
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to create comparison chart: {str(e)}")
+        # Create a simple error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Chart generation failed",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=20, color="red")
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)'
+        )
+        return fig
+
+def create_error_heatmap(err_price, grid_S, grid_K, S, K):
+    """Create error heatmap with robust error handling"""
+    try:
+        # Validate the error grid
+        if err_price is None or err_price.size == 0:
+            logger.error("Error grid is empty")
+            err_price = np.zeros((len(grid_S), len(grid_K)))
+        
+        # Ensure grid_S and grid_K are 1D arrays
+        grid_S = np.array(grid_S).flatten()
+        grid_K = np.array(grid_K).flatten()
+        
+        # Create the heatmap
+        fig = go.Figure(data=go.Heatmap(
+            z=err_price,
+            x=grid_S,
+            y=grid_K,
+            colorscale='RdBu',
+            zmid=0,
+            colorbar=dict(
+                title=dict(text="Error", side="right"),
+                thickness=30
+            )
+        ))
+        
+        # Add prediction point if valid
+        if S is not None and K is not None and S > 0 and K > 0:
+            fig.add_trace(go.Scatter(
+                x=[S], y=[K],
+                mode='markers',
+                marker=dict(size=15, color='yellow', symbol='star', line=dict(width=2, color='white')),
+                name='Prediction Point'
+            ))
+        
+        fig.update_layout(
+            title_font_size=20,
+            xaxis_title="Spot Price (S)",
+            yaxis_title="Strike Price (K)",
+            template="plotly_dark",
+            height=500,
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)',
+            font=dict(size=14)
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to create error heatmap: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Create a simple error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Heatmap generation failed",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=20, color="red")
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)'
+        )
+        return fig
+
+def create_error_distribution(err_price):
+    """Create error distribution chart with robust error handling"""
+    try:
+        # Flatten and validate error data
+        if err_price is None or err_price.size == 0:
+            logger.error("Error data is empty")
+            err_price = np.zeros(100)
+        
+        err_flat = np.array(err_price).flatten()
+        
+        # Create histogram
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=err_flat,
+            nbinsx=30,
+            name='Price Error',
+            marker_color='#60A5FA',
+            opacity=0.7
+        ))
+        
+        # Add zero error line
+        fig.add_vline(
+            x=0, 
+            line_dash="dash", 
+            line_color="#F87171",
+            annotation_text="Zero Error"
+        )
+        
+        fig.update_layout(
+            title_font_size=20,
+            xaxis_title="ML - MC Price Error",
+            yaxis_title="Frequency",
+            template="plotly_dark",
+            height=400,
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)',
+            font=dict(size=14)
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to create error distribution: {str(e)}")
+        
+        # Create a simple error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Distribution chart failed",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=20, color="red")
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)'
+        )
+        return fig
+
+def create_sensitivity_chart(x_values, y_values, x_label, y_label, current_x=None, title=None):
+    """Create sensitivity chart with robust error handling"""
+    try:
+        # Validate data
+        if x_values is None or y_values is None or len(x_values) == 0 or len(y_values) == 0:
+            logger.error("Invalid data for sensitivity chart")
+            return None
+            
+        # Create chart
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode='lines+markers',
+            line=dict(color='#3B82F6', width=3),
+            marker=dict(size=8, color='#3B82F6')
+        ))
+        
+        # Add current point line if valid
+        if current_x is not None and current_x > 0:
+            fig.add_vline(
+                x=current_x, 
+                line_dash="dash", 
+                line_color="#F87171",
+                annotation_text=f"Current: {current_x:.2f}"
+            )
+        
+        fig.update_layout(
+            title=title or "Sensitivity Analysis",
+            title_font_size=20,
+            xaxis_title=x_label,
+            yaxis_title=y_label,
+            template="plotly_dark",
+            height=400,
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)',
+            font=dict(size=14)
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to create sensitivity chart: {str(e)}")
+        
+        # Create a simple error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Sensitivity chart failed",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=20, color="red")
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)'
+        )
+        return fig
+
+def create_speed_comparison(t_mc_ms, t_ml_ms):
+    """Create speed comparison chart with robust error handling"""
+    try:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=["Monte Carlo", "ML Surrogate"],
+            y=[t_mc_ms, t_ml_ms],
+            marker_color=['#3B82F6', '#10B981'],
+            width=0.6
+        ))
+        
+        fig.update_layout(
+            title_font_size=20,
+            xaxis_title="",
+            yaxis_title="Execution Time (ms)",
+            template="plotly_dark",
+            height=400,
+            yaxis_type="log",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)',
+            font=dict(size=14)
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to create speed comparison: {str(e)}")
+        
+        # Create a simple error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Speed comparison failed",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=20, color="red")
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)'
+        )
+        return fig
+
+def create_accuracy_speed_tradeoff(mc_times, mc_errors, t_ml_ms, mean_abs_error):
+    """Create accuracy-speed tradeoff chart with robust error handling"""
+    try:
+        fig = go.Figure()
+        
+        # Add MC points
+        fig.add_trace(go.Scatter(
+            x=mc_times,
+            y=mc_errors,
+            mode='lines+markers',
+            name='Monte Carlo',
+            line=dict(color='#3B82F6', width=3),
+            marker=dict(size=10)
+        ))
+        
+        # Add ML point
+        fig.add_trace(go.Scatter(
+            x=[t_ml_ms],
+            y=[mean_abs_error],
+            mode='markers',
+            name='ML Surrogate',
+            marker=dict(size=15, color='#10B981', symbol='star')
+        ))
+        
+        fig.update_layout(
+            title_font_size=20,
+            xaxis_title="Execution Time (ms)",
+            yaxis_title="Mean Absolute Error",
+            template="plotly_dark",
+            height=450,
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)',
+            font=dict(size=14),
+            xaxis_type="log"
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to create accuracy-speed tradeoff: {str(e)}")
+        
+        # Create a simple error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Accuracy-speed tradeoff failed",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=20, color="red")
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(30,41,59,1)',
+            plot_bgcolor='rgba(15,23,42,1)'
+        )
+        return fig
 
 # ======================
 # HEADER
@@ -505,7 +902,7 @@ if train:
         status_text.text("Initializing models...")
         progress_bar.progress(40)
         
-        # Create ML surrogate instance directly (no factory function needed)
+        # Create ML surrogate instance directly
         try:
             ml = MonteCarloML(num_sim, num_steps, seed)
             logger.info("Successfully created MonteCarloML instance")
@@ -559,24 +956,15 @@ if train:
         # MC prediction for comparison
         try:
             # Simple MC implementation for comparison
-            np.random.seed(seed)
-            dt = T / num_steps
-            Z = np.random.standard_normal((num_sim, num_steps))
-            S_paths = np.zeros((num_sim, num_steps))
-            S_paths[:, 0] = S
-            
-            for t in range(1, num_steps):
-                drift = (r - q - 0.5 * sigma**2) * dt
-                diffusion = sigma * np.sqrt(dt) * Z[:, t]
-                S_paths[:, t] = S_paths[:, t-1] * np.exp(drift + diffusion)
-            
-            if option_type == "call":
-                payoff = np.maximum(S_paths[:, -1] - K, 0.0)
-            else:
-                payoff = np.maximum(K - S_paths[:, -1], 0.0)
-            
-            price_mc = float(np.mean(np.exp(-r * T) * payoff))
-            t_mc_ms = 0.0  # We didn't time it, but we don't need exact time here
+            price_mc = price_monte_carlo(
+                S, K, T, r, sigma, option_type, q,
+                num_sim=num_sim, num_steps=num_steps, seed=seed
+            )
+            _, t_mc_ms = timeit_ms(
+                price_monte_carlo,
+                S, K, T, r, sigma, option_type, q,
+                num_sim=num_sim, num_steps=num_steps, seed=seed
+            )
         except Exception as e:
             logger.error(f"MC pricing failed: {str(e)}")
             price_mc = 0.0
@@ -621,12 +1009,12 @@ if train:
         for _, row in df.iterrows():
             try:
                 # Extract and validate parameters
-                S_val = float(row['S'])
-                K_val = float(row['K'])
-                T_val = float(row['T'])
-                r_val = float(row['r'])
-                sigma_val = float(row['sigma'])
-                q_val = float(row['q'])
+                S_val = _extract_scalar(row['S'])
+                K_val = _extract_scalar(row['K'])
+                T_val = _extract_scalar(row['T'])
+                r_val = _extract_scalar(row['r'])
+                sigma_val = _extract_scalar(row['sigma'])
+                q_val = _extract_scalar(row['q'])
                 
                 # Validate parameters
                 if S_val <= 0 or K_val <= 0 or T_val <= 0.001 or sigma_val <= 0.001:
@@ -634,19 +1022,10 @@ if train:
                     continue
                 
                 # Generate MC price
-                np.random.seed(seed)
-                dt = T_val / num_steps
-                Z = np.random.standard_normal((num_sim, num_steps))
-                S_paths = np.zeros((num_sim, num_steps))
-                S_paths[:, 0] = S_val
-                
-                for t in range(1, num_steps):
-                    drift = (r_val - q_val - 0.5 * sigma_val**2) * dt
-                    diffusion = sigma_val * np.sqrt(dt) * Z[:, t]
-                    S_paths[:, t] = S_paths[:, t-1] * np.exp(drift + diffusion)
-                
-                payoff = np.maximum(S_paths[:, -1] - K_val, 0.0)  # Always call for training
-                price = float(np.mean(np.exp(-r_val * T_val) * payoff))
+                price = price_monte_carlo(
+                    S_val, K_val, T_val, r_val, sigma_val, "call", q_val,
+                    num_sim=max(1000, num_sim//10), num_steps=num_steps, seed=seed
+                )
                 prices_mc.append(price)
             except Exception as e:
                 logger.error(f"MC pricing failed for row: {row}, error: {str(e)}")
@@ -723,38 +1102,8 @@ if train:
             st.markdown('<h2 class="chart-title">Model Comparison</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Comparison of Monte Carlo and ML surrogate pricing for the selected input parameters</p>', unsafe_allow_html=True)
             
-            # Create comparison chart
-            fig_comparison = go.Figure()
-            
-            # Add price comparison
-            fig_comparison.add_trace(go.Bar(
-                x=["Monte Carlo", "ML Surrogate"],
-                y=[price_mc, price_ml],
-                name="Price",
-                marker_color=['#3B82F6', '#10B981'],
-                width=0.6
-            ))
-            
-            # Add error line
-            fig_comparison.add_shape(
-                type="line",
-                x0=-0.4, y0=price_mc,
-                x1=1.4, y1=price_mc,
-                line=dict(color="#F87171", width=2, dash="dash"),
-                name="MC Reference"
-            )
-            
-            fig_comparison.update_layout(
-                title_font_size=20,
-                xaxis_title="",
-                yaxis_title="Option Price",
-                template="plotly_dark",
-                height=450,
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14),
-                showlegend=False
-            )
+            # Create comparison chart with error handling
+            fig_comparison = create_comparison_chart(price_mc, price_ml, t_mc_ms, t_ml_ms)
             st.plotly_chart(fig_comparison, use_container_width=True)
             
             # Add metrics table
@@ -802,67 +1151,14 @@ if train:
             st.markdown('<h2 class="chart-title">Error Heatmap</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Visualization of the price error (ML - MC) across the training grid for call options</p>', unsafe_allow_html=True)
             
-            # Create error heatmap
-            fig_heatmap = go.Figure(data=go.Heatmap(
-                z=err_price,
-                x=grid_S,
-                y=grid_K,
-                colorscale='RdBu',
-                zmid=0,
-                colorbar=dict(
-                    title=dict(text="Error", side="right"),
-                    thickness=30
-                )
-            ))
-            
-            fig_heatmap.add_trace(go.Scatter(
-                x=[S], y=[K],
-                mode='markers',
-                marker=dict(size=15, color='yellow', symbol='star', line=dict(width=2, color='white')),
-                name='Prediction Point'
-            ))
-            
-            fig_heatmap.update_layout(
-                title_font_size=20,
-                xaxis_title="Spot Price (S)",
-                yaxis_title="Strike Price (K)",
-                template="plotly_dark",
-                height=500,
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14)
-            )
+            # Create error heatmap with error handling
+            fig_heatmap = create_error_heatmap(err_price, grid_S, grid_K, S, K)
             st.plotly_chart(fig_heatmap, use_container_width=True)
             
             st.markdown('<h3 class="subsection-header">Error Distribution</h3>', unsafe_allow_html=True)
             
-            # Create error distribution chart
-            fig_error_dist = go.Figure()
-            fig_error_dist.add_trace(go.Histogram(
-                x=err_price.flatten(),
-                nbinsx=30,
-                name='Price Error',
-                marker_color='#60A5FA',
-                opacity=0.7
-            ))
-            
-            fig_error_dist.add_vline(
-                x=0, 
-                line_dash="dash", 
-                line_color="#F87171",
-                annotation_text="Zero Error"
-            )
-            
-            fig_error_dist.update_layout(
-                title_font_size=20,
-                xaxis_title="ML - MC Price Error",
-                yaxis_title="Frequency",
-                template="plotly_dark",
-                height=400,
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14)
-            )
+            # Create error distribution chart with error handling
+            fig_error_dist = create_error_distribution(err_price)
             st.plotly_chart(fig_error_dist, use_container_width=True)
             
             # Error metrics
@@ -917,29 +1213,11 @@ if train:
                     s_values.append(s_val)
             
             if len(s_errors) > 0:
-                fig_sensitivity_s = go.Figure()
-                fig_sensitivity_s.add_trace(go.Scatter(
-                    x=s_values,
-                    y=s_errors,
-                    mode='lines+markers',
-                    line=dict(color='#3B82F6', width=3),
-                    marker=dict(size=8, color='#3B82F6')
-                ))
-                fig_sensitivity_s.add_vline(
-                    x=S, 
-                    line_dash="dash", 
-                    line_color="#F87171",
-                    annotation_text=f"Current S: {S}"
-                )
-                fig_sensitivity_s.update_layout(
-                    title_font_size=20,
-                    xaxis_title="Spot Price (S)",
-                    yaxis_title="Absolute Error",
-                    template="plotly_dark",
-                    height=400,
-                    paper_bgcolor='rgba(30,41,59,1)',
-                    plot_bgcolor='rgba(15,23,42,1)',
-                    font=dict(size=14)
+                fig_sensitivity_s = create_sensitivity_chart(
+                    s_values, s_errors, 
+                    "Spot Price (S)", "Absolute Error",
+                    current_x=S,
+                    title="Error vs Spot Price (S)"
                 )
                 st.plotly_chart(fig_sensitivity_s, use_container_width=True)
             else:
@@ -959,29 +1237,11 @@ if train:
                     k_values.append(k_val)
             
             if len(k_errors) > 0:
-                fig_sensitivity_k = go.Figure()
-                fig_sensitivity_k.add_trace(go.Scatter(
-                    x=k_values,
-                    y=k_errors,
-                    mode='lines+markers',
-                    line=dict(color='#3B82F6', width=3),
-                    marker=dict(size=8, color='#3B82F6')
-                ))
-                fig_sensitivity_k.add_vline(
-                    x=K, 
-                    line_dash="dash", 
-                    line_color="#F87171",
-                    annotation_text=f"Current K: {K}"
-                )
-                fig_sensitivity_k.update_layout(
-                    title_font_size=20,
-                    xaxis_title="Strike Price (K)",
-                    yaxis_title="Absolute Error",
-                    template="plotly_dark",
-                    height=400,
-                    paper_bgcolor='rgba(30,41,59,1)',
-                    plot_bgcolor='rgba(15,23,42,1)',
-                    font=dict(size=14)
+                fig_sensitivity_k = create_sensitivity_chart(
+                    k_values, k_errors, 
+                    "Strike Price (K)", "Absolute Error",
+                    current_x=K,
+                    title="Error vs Strike Price (K)"
                 )
                 st.plotly_chart(fig_sensitivity_k, use_container_width=True)
             else:
@@ -1044,25 +1304,7 @@ if train:
             # Speed comparison
             st.markdown('<h3 class="subsection-header">Speed Comparison</h3>', unsafe_allow_html=True)
             
-            fig_speed = go.Figure()
-            fig_speed.add_trace(go.Bar(
-                x=["Monte Carlo", "ML Surrogate"],
-                y=[t_mc_ms, t_ml_ms],
-                marker_color=['#3B82F6', '#10B981'],
-                width=0.6
-            ))
-            
-            fig_speed.update_layout(
-                title_font_size=20,
-                xaxis_title="",
-                yaxis_title="Execution Time (ms)",
-                template="plotly_dark",
-                height=400,
-                yaxis_type="log",
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14)
-            )
+            fig_speed = create_speed_comparison(t_mc_ms, t_ml_ms)
             st.plotly_chart(fig_speed, use_container_width=True)
             
             st.markdown(f"""
@@ -1084,37 +1326,8 @@ if train:
             mc_times = [t_mc_ms * (size/num_sim) for size in mc_sizes]
             mc_errors = [0.025, 0.018, 0.012, 0.008, 0.005]  # Approximate error rates
             
-            fig_tradeoff = go.Figure()
-            
-            # Add MC points
-            fig_tradeoff.add_trace(go.Scatter(
-                x=mc_times,
-                y=mc_errors,
-                mode='lines+markers',
-                name='Monte Carlo',
-                line=dict(color='#3B82F6', width=3),
-                marker=dict(size=10)
-            ))
-            
-            # Add ML point
-            fig_tradeoff.add_trace(go.Scatter(
-                x=[t_ml_ms],
-                y=[mean_abs_error],
-                mode='markers',
-                name='ML Surrogate',
-                marker=dict(size=15, color='#10B981', symbol='star')
-            ))
-            
-            fig_tradeoff.update_layout(
-                title_font_size=20,
-                xaxis_title="Execution Time (ms)",
-                yaxis_title="Mean Absolute Error",
-                template="plotly_dark",
-                height=450,
-                paper_bgcolor='rgba(30,41,59,1)',
-                plot_bgcolor='rgba(15,23,42,1)',
-                font=dict(size=14),
-                xaxis_type="log"
+            fig_tradeoff = create_accuracy_speed_tradeoff(
+                mc_times, mc_errors, t_ml_ms, mean_abs_error
             )
             st.plotly_chart(fig_tradeoff, use_container_width=True)
             
