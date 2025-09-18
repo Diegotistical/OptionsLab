@@ -416,18 +416,21 @@ st.set_page_config(
     page_icon="🚀"
 )
 
-# Clean CSS styling
+# ======================
+# STYLING
+# ======================
 st.markdown("""
 <style>
     /* Base styling */
     .main-header {
-        font-size: 2.2rem;
+        font-size: 2.5rem;
         color: white;
         margin-bottom: 0.5rem;
-        font-weight: 600;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        font-weight: 700;
     }
     .sub-header {
-        font-size: 1.2rem;
+        font-size: 1.4rem;
         color: #E2E8F0;
         margin-bottom: 1.5rem;
         opacity: 0.9;
@@ -436,35 +439,51 @@ st.markdown("""
     /* Metric cards */
     .metric-card {
         background-color: #1E293B;
-        border-radius: 8px;
-        padding: 1rem;
-        margin-bottom: 1rem;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+        border: 1px solid #334155;
     }
     
-    /* Tabs styling */
+    /* Tabs styling - FULL WIDTH AND EXPANDED */
     .stTabs [data-baseweb="tablist"] {
-        margin-bottom: 1.5rem;
-        border-bottom: 1px solid #334155;
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        gap: 0.5rem !important;
+        margin-bottom: 1.5rem !important;
+        width: 100% !important;
+        justify-content: stretch !important;
     }
-    .stTabs [data-baseweb="tab"] {
-        height: 45px;
-        border-radius: 6px 6px 0 0;
-        font-size: 1rem;
-        font-weight: 500;
-        background-color: #1E293B;
-        color: #CBD5E1;
-        padding: 0 15px;
+    .stTabs [role="tab"] {
+        flex: 1 !important;
+        min-width: 0 !important;
+        height: 60px !important;
+        border-radius: 10px 10px 0 0 !important;
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
+        background-color: #1E293B !important;
+        color: #CBD5E1 !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: all 0.2s ease !important;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #3B82F6;
-        color: white;
-        font-weight: 600;
-        border-bottom: 3px solid #1E3A8A;
+        background-color: #3B82F6 !important;
+        color: white !important;
+        font-weight: 700 !important;
+        border-bottom: 5px solid #1E3A8A !important;
+        transform: translateY(-2px) !important;
+    }
+    .stTabs [role="tab"]:hover:not([aria-selected="true"]) {
+        background-color: #334155 !important;
+        color: white !important;
     }
     
     /* Chart elements */
     .chart-title {
-        font-size: 1.3rem;
+        font-size: 1.5rem;
         font-weight: 600;
         color: white;
         margin-bottom: 0.5rem;
@@ -472,47 +491,53 @@ st.markdown("""
         border-bottom: 1px solid #334155;
     }
     .chart-description {
-        font-size: 0.95rem;
+        font-size: 1.05rem;
         color: #CBD5E1;
-        margin-bottom: 1rem;
-        line-height: 1.4;
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
     }
     
     /* Metric elements */
     .metric-label {
         color: #94A3B8;
-        font-size: 0.85rem;
+        font-size: 0.9rem;
         font-weight: 500;
     }
     .metric-value {
         color: white;
-        font-size: 1.5rem;
-        font-weight: 600;
+        font-size: 2rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .metric-delta {
+        color: #64748B;
+        font-size: 1rem;
+        margin-top: 0.3rem;
     }
     
     /* Section headers */
     .subsection-header {
-        font-size: 1.2rem;
+        font-size: 1.4rem;
         color: white;
-        margin: 1rem 0 0.7rem 0;
+        margin: 1.2rem 0 0.8rem 0;
         font-weight: 600;
     }
     
     /* Input sections */
     .engine-option {
         background-color: #1E293B;
-        border-radius: 6px;
-        padding: 0.6rem;
-        margin-bottom: 0.5rem;
+        border-radius: 8px;
+        padding: 0.8rem;
+        margin-bottom: 0.6rem;
         border: 1px solid #334155;
     }
     .engine-label {
-        font-size: 0.85rem;
+        font-size: 0.9rem;
         color: #94A3B8;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.3rem;
     }
     .engine-value {
-        font-size: 1rem;
+        font-size: 1.1rem;
         color: white;
         font-weight: 500;
     }
@@ -520,31 +545,25 @@ st.markdown("""
     /* Progress bar */
     .stProgress > div > div > div {
         background-color: #3B82F6;
+        height: 8px !important;
     }
     
     /* Button styling */
     .stButton > button {
         background-color: #3B82F6;
         color: white;
-        border-radius: 6px;
+        border-radius: 8px;
         border: none;
-        padding: 0.5rem 1rem;
-        font-weight: 500;
+        padding: 0.75rem 2rem;
+        font-weight: 600;
+        font-size: 1.1rem;
         transition: all 0.2s ease;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     .stButton > button:hover {
         background-color: #2563EB;
         transform: translateY(-1px);
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    /* Input styling */
-    .stNumberInput > div > div > input,
-    .stSlider > div > div > div > div {
-        background-color: #1E293B;
-        color: white;
-        border: 1px solid #334155;
-        border-radius: 4px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
     }
 </style>
 """, unsafe_allow_html=True)
