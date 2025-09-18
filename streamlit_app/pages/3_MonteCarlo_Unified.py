@@ -462,7 +462,7 @@ st.markdown("""
         font-size: 1.3rem !important;
         font-weight: 600 !important;
         background-color: #1E293B !important;
-        color: #CBD5E1 !important;
+        color: white !important;
         padding: 0 !important;
         display: flex !important;
         align-items: center !important;
@@ -533,7 +533,7 @@ st.markdown("""
     }
     .engine-label {
         font-size: 0.9rem;
-        color: #94A3B8;
+        color: white;  /* CHANGED FROM #94A3B8 TO WHITE */
         margin-bottom: 0.3rem;
     }
     .engine-value {
@@ -564,6 +564,14 @@ st.markdown("""
         background-color: #2563EB;
         transform: translateY(-1px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    }
+    
+    /* Input field labels */
+    .stNumberInput > div > label,
+    .stSlider > div > label,
+    .stSelectbox > div > label {
+        color: white !important;
+        font-weight: 500 !important;
     }
 </style>
 """, unsafe_allow_html=True)
