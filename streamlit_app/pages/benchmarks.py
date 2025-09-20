@@ -291,6 +291,7 @@ st.markdown("""
         font-size: 1rem;
         transition: all 0.2s ease;
         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        width: 100% !important;
     }
     .stButton > button:hover {
         background-color: #2563EB;
@@ -431,6 +432,15 @@ st.markdown("""
         padding: 0.1rem 0.3rem;
         border-radius: 4px;
         font-weight: 500;
+    }
+    
+    /* Explanation box */
+    .explanation-box {
+        background-color: white;
+        border-left: 4px solid #3B82F6;
+        padding: 1rem;
+        border-radius: 4px;
+        margin: 1rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -653,11 +663,11 @@ if run:
         # Monte Carlo ML Benchmark
         if include_mc_ml:
             status_text.text("Running Monte Carlo ML benchmark...")
-            progress_bar.progress(80)
+            progress_bar.progress(60)
             
             try:
+                # First, train the model (one-time cost)
                 if models["mc_ml"] is not None:
-                    # Need to fit the model first for a meaningful comparison
                     # Create a small training grid
                     grid_S = np.linspace(max(50, S-20), min(200, S+20), 5)
                     grid_K = np.linspace(max(50, K-20), min(200, K+20), 5)
@@ -673,29 +683,38 @@ if run:
                     })
                     
                     # Fit the model
-                    models["mc_ml"].fit(df)
+                    _, t_fit_ms = timeit_ms(models["mc_ml"].fit, df)
                     
                     # Predict our single point
                     x_single = pd.DataFrame([{
                         "S": S, "K": K, "T": T, "r": r, "sigma": sigma, "q": q
                     }])
+                    _, t_pred_ms = timeit_ms(models["mc_ml"].predict, x_single)
                     pred_df = models["mc_ml"].predict(x_single)
                     price = pred_df["price"].iloc[0]
-                    
-                    # Time the prediction (excluding training time)
-                    _, latency = timeit_ms(models["mc_ml"].predict, x_single)
                 else:
+                    # Fallback implementation
                     price, latency = timeit_ms(
                         fallback_monte_carlo_ml, S, K, T, r, sigma, option_type, q, 
                         num_sim, num_steps, seed
                     )
+                    t_fit_ms = 0
+                    t_pred_ms = latency
                 
+                # Add ML results with separate training and prediction times
                 results.append({
-                    "model": "Monte Carlo ML",
+                    "model": "Monte Carlo ML (Training)",
+                    "price": "N/A",
+                    "time_ms": t_fit_ms,
+                    "type": "ML Training",
+                    "description": "One-time model training"
+                })
+                results.append({
+                    "model": "Monte Carlo ML (Prediction)",
                     "price": price,
-                    "time_ms": latency,
-                    "type": "ML Surrogate",
-                    "description": "Machine learning accelerated pricing"
+                    "time_ms": t_pred_ms,
+                    "type": "ML Prediction",
+                    "description": "Fast prediction after training"
                 })
                 
                 if reference_price is not None and price != "Error":
@@ -703,11 +722,18 @@ if run:
             except Exception as e:
                 logger.error(f"Monte Carlo ML benchmark failed: {str(e)}")
                 results.append({
-                    "model": "Monte Carlo ML",
+                    "model": "Monte Carlo ML (Training)",
                     "price": "Error",
                     "time_ms": "—",
-                    "type": "ML Surrogate",
-                    "description": "Machine learning accelerated pricing"
+                    "type": "ML Training",
+                    "description": "One-time model training"
+                })
+                results.append({
+                    "model": "Monte Carlo ML (Prediction)",
+                    "price": "Error",
+                    "time_ms": "—",
+                    "type": "ML Prediction",
+                    "description": "Fast prediction after training"
                 })
         
         # Final progress update
@@ -732,7 +758,7 @@ if run:
             # Get error if available
             error_str = "—"
             if model in price_errors:
-                error_str = f"{price_errors[model]:.6f}"
+                error_str = f"{price_errors[model.split(' ')[0]]:.6f}"
             
             display_data.append({
                 "Pricing Model": model,
@@ -780,8 +806,25 @@ if run:
             },
             hide_index=True,
             use_container_width=True,
-            height=180
+            height=240
         )
+        
+        # Add explanation about MC ML timing
+        st.markdown('<div class="explanation-box">', unsafe_allow_html=True)
+        st.markdown("""
+        <p style="color: #475569; margin: 0;">
+        <strong>Why is Monte Carlo ML faster?</strong> 
+        The Monte Carlo ML model has two phases: 
+        (1) Training (one-time cost, shown as "Monte Carlo ML (Training)") 
+        (2) Prediction (recurring cost, shown as "Monte Carlo ML (Prediction)")
+        
+        While training is expensive (comparable to running many Monte Carlo simulations), 
+        the prediction phase is extremely fast (typically 0.1-1ms). This makes ML surrogates 
+        ideal for applications requiring thousands of option pricings, such as risk management 
+        and scenario analysis, where the one-time training cost is quickly amortized.
+        </p>
+        """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         
         # Create visualization tabs
         tab1, tab2, tab3, tab4 = st.tabs([
@@ -808,54 +851,57 @@ if run:
                     fig_price = go.Figure()
                     
                     # Add price points
-                    fig_price.add_trace(go.Bar(
-                        x=[r["model"] for r in valid_results],
-                        y=[r["price"] for r in valid_results],
-                        marker_color=['#3B82F6' if r["model"] == "Black-Scholes" else '#10B981' for r in valid_results],
-                        width=0.6
-                    ))
+                    mc_ml_price = next((r["price"] for r in valid_results if "Monte Carlo ML (Prediction)" in r["model"]), None)
                     
-                    # Add reference line if Black-Scholes is available
-                    if reference_price is not None:
-                        fig_price.add_shape(
-                            type="line",
-                            x0=-0.5, y0=reference_price,
-                            x1=len(valid_results)-0.5, y1=reference_price,
-                            line=dict(color="#F87171", width=2, dash="dash"),
-                            name="Black-Scholes Reference"
+                    if mc_ml_price is not None:
+                        fig_price.add_trace(go.Bar(
+                            x=[r["model"] for r in valid_results if "Training" not in r["model"]],
+                            y=[r["price"] for r in valid_results if "Training" not in r["model"]],
+                            marker_color=['#3B82F6' if "Black-Scholes" in r["model"] else '#10B981' for r in valid_results if "Training" not in r["model"]],
+                            width=0.6
+                        ))
+                        
+                        # Add reference line if Black-Scholes is available
+                        if reference_price is not None:
+                            fig_price.add_shape(
+                                type="line",
+                                x0=-0.5, y0=reference_price,
+                                x1=len(valid_results)-0.5, y1=reference_price,
+                                line=dict(color="#F87171", width=2, dash="dash"),
+                                name="Black-Scholes Reference"
+                            )
+                        
+                        fig_price.update_layout(
+                            title="Option Price Comparison",
+                            xaxis_title="",
+                            yaxis_title="Option Price",
+                            template="plotly_white",
+                            height=400,
+                            paper_bgcolor='white',
+                            plot_bgcolor='white',
+                            font=dict(size=12, color='#475569'),
+                            showlegend=False,
+                            margin=dict(l=40, r=40, t=40, b=40)
                         )
-                    
-                    fig_price.update_layout(
-                        title="Option Price Comparison",
-                        xaxis_title="",
-                        yaxis_title="Option Price",
-                        template="plotly_white",
-                        height=400,
-                        paper_bgcolor='white',
-                        plot_bgcolor='white',
-                        font=dict(size=12, color='#475569'),
-                        showlegend=False,
-                        margin=dict(l=40, r=40, t=40, b=40)
-                    )
-                    st.plotly_chart(fig_price, use_container_width=True)
+                        st.plotly_chart(fig_price, use_container_width=True)
                 
                 with col2:
-                    # Time comparison chart
-                    fig_time = go.Figure()
+                    # Time comparison chart - show only prediction times
+                    pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or "Monte Carlo" in r["model"]]
+                    pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
                     
-                    # Add time points (filter out errors)
-                    time_results = [r for r in results if isinstance(r["time_ms"], (int, float))]
-                    
-                    if time_results:
+                    if pred_results:
+                        fig_time = go.Figure()
+                        
                         fig_time.add_trace(go.Bar(
-                            x=[r["model"] for r in time_results],
-                            y=[r["time_ms"] for r in time_results],
-                            marker_color=['#3B82F6' if r["model"] == "Black-Scholes" else '#8B5CF6' for r in time_results],
+                            x=[r["model"] for r in pred_results],
+                            y=[r["time_ms"] for r in pred_results],
+                            marker_color=['#3B82F6' if "Black-Scholes" in r["model"] else '#8B5CF6' if "Prediction" in r["model"] else '#EF4444' for r in pred_results],
                             width=0.6
                         ))
                         
                         fig_time.update_layout(
-                            title="Execution Time Comparison",
+                            title="Execution Time Comparison (Prediction Phase)",
                             xaxis_title="",
                             yaxis_title="Time (ms)",
                             template="plotly_white",
@@ -879,20 +925,21 @@ if run:
             st.markdown('<h2 class="chart-title">Performance Analysis</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Detailed analysis of computational efficiency</p>', unsafe_allow_html=True)
             
-            # Filter valid time results
-            time_results = [r for r in results if isinstance(r["time_ms"], (int, float))]
+            # Filter valid time results for prediction phase
+            pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or "Monte Carlo" in r["model"]]
+            pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
             
-            if time_results:
+            if pred_results:
                 # Create performance metrics
-                min_time = min(r["time_ms"] for r in time_results)
-                max_time = max(r["time_ms"] for r in time_results)
-                bs_time = next((r["time_ms"] for r in time_results if r["model"] == "Black-Scholes"), None)
+                min_time = min(r["time_ms"] for r in pred_results)
+                max_time = max(r["time_ms"] for r in pred_results)
+                bs_time = next((r["time_ms"] for r in pred_results if "Black-Scholes" in r["model"]), None)
                 
                 # Speedup calculations
                 speedups = {}
                 if bs_time is not None:
-                    for r in time_results:
-                        if r["model"] != "Black-Scholes":
+                    for r in pred_results:
+                        if "Black-Scholes" not in r["model"]:
                             speedups[r["model"]] = bs_time / r["time_ms"]
                 
                 # Create performance metrics
@@ -904,7 +951,7 @@ if run:
                 with col1:
                     st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-title">Fastest Model</div>', unsafe_allow_html=True)
-                    fastest = min(time_results, key=lambda x: x["time_ms"])
+                    fastest = min(pred_results, key=lambda x: x["time_ms"])
                     st.markdown(f'<div class="executive-value">{fastest["model"]}</div>', unsafe_allow_html=True)
                     st.markdown(f'<div class="executive-help">Execution time: {fastest["time_ms"]:.2f} ms</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -912,7 +959,7 @@ if run:
                 with col2:
                     st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-title">Slowest Model</div>', unsafe_allow_html=True)
-                    slowest = max(time_results, key=lambda x: x["time_ms"])
+                    slowest = max(pred_results, key=lambda x: x["time_ms"])
                     st.markdown(f'<div class="executive-value">{slowest["model"]}</div>', unsafe_allow_html=True)
                     st.markdown(f'<div class="executive-help">Execution time: {slowest["time_ms"]:.2f} ms</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -938,7 +985,7 @@ if run:
                 st.markdown('<h3 class="subsection-header">Performance Breakdown</h3>', unsafe_allow_html=True)
                 
                 # Create model cards
-                for r in time_results:
+                for r in pred_results:
                     st.markdown('<div class="model-card">', unsafe_allow_html=True)
                     st.markdown(f'<div class="model-name">{r["model"]}</div>', unsafe_allow_html=True)
                     
@@ -956,7 +1003,7 @@ if run:
                         st.markdown('</div>', unsafe_allow_html=True)
                     
                     # Speedup vs Black-Scholes
-                    if bs_time is not None and r["model"] != "Black-Scholes":
+                    if bs_time is not None and "Black-Scholes" not in r["model"]:
                         speedup = bs_time / r["time_ms"]
                         st.markdown('<div class="model-detail">', unsafe_allow_html=True)
                         st.markdown('<span>Speedup vs Black-Scholes</span>', unsafe_allow_html=True)
@@ -972,14 +1019,14 @@ if run:
                 
                 # Add performance bars
                 fig_perf.add_trace(go.Bar(
-                    x=[r["model"] for r in time_results],
-                    y=[r["time_ms"] for r in time_results],
-                    marker_color=['#3B82F6' if r["model"] == "Black-Scholes" else '#8B5CF6' for r in time_results],
+                    x=[r["model"] for r in pred_results],
+                    y=[r["time_ms"] for r in pred_results],
+                    marker_color=['#3B82F6' if "Black-Scholes" in r["model"] else '#8B5CF6' if "Prediction" in r["model"] else '#EF4444' for r in pred_results],
                     width=0.6
                 ))
                 
                 fig_perf.update_layout(
-                    title="Execution Time Distribution",
+                    title="Execution Time Distribution (Prediction Phase)",
                     xaxis_title="",
                     yaxis_title="Time (ms)",
                     template="plotly_white",
@@ -1004,9 +1051,9 @@ if run:
                                f'running <span class="highlight">{best_speedup_model[1]:.1f}x</span> faster than the analytical Black-Scholes solution.</p>', 
                                unsafe_allow_html=True)
                 
-                if len(time_results) > 1:
-                    fastest = min(time_results, key=lambda x: x["time_ms"])
-                    slowest = max(time_results, key=lambda x: x["time_ms"])
+                if len(pred_results) > 1:
+                    fastest = min(pred_results, key=lambda x: x["time_ms"])
+                    slowest = max(pred_results, key=lambda x: x["time_ms"])
                     st.markdown(f'<p>The fastest model (<span class="highlight">{fastest["model"]}</span>) is '
                                f'<span class="highlight">{slowest["time_ms"]/fastest["time_ms"]:.1f}x</span> faster '
                                f'than the slowest model (<span class="highlight">{slowest["model"]}</span>).</p>', 
@@ -1014,7 +1061,8 @@ if run:
                 
                 st.markdown('<p>For production environments requiring high-frequency pricing, '
                            'the Monte Carlo ML approach provides near-instant predictions after an initial training phase, '
-                           'making it ideal for real-time risk management applications.</p>', 
+                           'making it ideal for real-time risk management applications. The one-time training cost is quickly '
+                           'amortized when pricing thousands of options.</p>', 
                            unsafe_allow_html=True)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -1029,10 +1077,11 @@ if run:
             
             # Filter valid price results with reference
             valid_results = [r for r in results if isinstance(r["price"], (int, float)) and reference_price is not None]
+            valid_results = [r for r in valid_results if "Training" not in r["model"]]
             
             if valid_results and reference_price is not None:
                 # Calculate errors
-                errors = [(r["model"], abs(r["price"] - reference_price)) for r in valid_results if r["model"] != "Black-Scholes"]
+                errors = [(r["model"], abs(r["price"] - reference_price)) for r in valid_results if "Black-Scholes" not in r["model"]]
                 
                 if errors:
                     # Create accuracy metrics
@@ -1141,7 +1190,7 @@ if run:
                                'techniques provides the best balance of accuracy and computational efficiency.</p>', 
                                unsafe_allow_html=True)
                     
-                    st.markdown('<p>The Monte Carlo ML model, while extremely fast, maintains reasonable accuracy '
+                    st.markdown('<p>The Monte Carlo ML model, while extremely fast for prediction, maintains reasonable accuracy '
                                'due to its training on high-quality Monte Carlo simulations, making it ideal for '
                                'applications where speed is critical and minor precision trade-offs are acceptable.</p>', 
                                unsafe_allow_html=True)
@@ -1165,9 +1214,10 @@ if run:
             # Generate strategic insights based on results
             if len(results) > 0:
                 # Identify fastest model (excluding Black-Scholes if present)
-                time_results = [r for r in results if isinstance(r["time_ms"], (int, float))]
-                if time_results:
-                    fastest = min(time_results, key=lambda x: x["time_ms"])
+                pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or "Monte Carlo" in r["model"]]
+                pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
+                if pred_results:
+                    fastest = min(pred_results, key=lambda x: x["time_ms"])
                     st.markdown(f'<p><span class="highlight">Speed Priority:</span> For applications requiring real-time pricing '
                                f'of large option portfolios, the <span class="highlight">{fastest["model"]}</span> model '
                                f'provides the fastest execution at <span class="highlight">{fastest["time_ms"]:.2f} ms</span> per option. '
@@ -1176,8 +1226,9 @@ if run:
                 
                 # Identify most accurate model
                 valid_results = [r for r in results if isinstance(r["price"], (int, float)) and reference_price is not None]
+                valid_results = [r for r in valid_results if "Training" not in r["model"]]
                 if valid_results and reference_price is not None:
-                    errors = [(r["model"], abs(r["price"] - reference_price)) for r in valid_results if r["model"] != "Black-Scholes"]
+                    errors = [(r["model"], abs(r["price"] - reference_price)) for r in valid_results if "Black-Scholes" not in r["model"]]
                     if errors:
                         most_accurate = min(errors, key=lambda x: x[1])
                         st.markdown(f'<p><span class="highlight">Accuracy Priority:</span> When precision is critical, such as for '
@@ -1188,7 +1239,7 @@ if run:
                                    unsafe_allow_html=True)
                 
                 # ML-specific insight
-                mc_ml_result = next((r for r in results if "Monte Carlo ML" in r["model"]), None)
+                mc_ml_result = next((r for r in results if "Monte Carlo ML (Prediction)" in r["model"]), None)
                 if mc_ml_result and isinstance(mc_ml_result["price"], (int, float)) and reference_price is not None:
                     ml_error = abs(mc_ml_result["price"] - reference_price)
                     st.markdown(f'<p><span class="highlight">ML Acceleration:</span> The Monte Carlo ML model demonstrates the '
