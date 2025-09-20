@@ -496,6 +496,53 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Add this to your styling section
+st.markdown("""
+<style>
+    /* Tab container */
+    .stTabs [data-baseweb="tablist"] {
+        background-color: #1A202C;
+        border-radius: 8px;
+        margin-bottom: 2rem;
+    }
+
+    /* Tab items */
+    .stTabs [role="tab"] {
+        background-color: transparent;
+        color: #CBD5E1; /* Light grey for inactive tabs */
+        font-weight: 500;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px 8px 0 0;
+        transition: all 0.3s ease;
+    }
+
+    /* Active tab */
+    .stTabs [aria-selected="true"] {
+        background-color: #3B82F6;
+        color: white;
+        margin-bottom: -2px;
+    }
+
+    /* Red underline for active tab */
+    .stTabs [aria-selected="true"]::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background-color: #EF4444;
+    }
+
+    /* Progress bar */
+    .stProgress > div > div > div {
+        background-color: #4B5563; /* Dark grey progress bar */
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
 # ======================
 # PAGE CONTENT
 # ======================
