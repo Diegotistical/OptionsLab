@@ -203,44 +203,40 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     
-    /* Tabs styling - FULL WIDTH AND EXPANDED */
+    /* Tab styling - FIXED AS REQUESTED */
     .stTabs [data-baseweb="tablist"] {
-        display: flex !important;
-        flex-wrap: nowrap !important;
-        gap: 0.5rem !important;
-        margin-bottom: 1.5rem !important;
-        width: 100% !important;
-        justify-content: stretch !important;
-    }
-    .stTabs [role="tab"] {
-        flex: 1 !important;
-        min-width: 0 !important;
-        height: 55px !important;
-        border-radius: 10px 10px 0 0 !important;
-        font-size: 1.2rem !important;
-        font-weight: 600 !important;
-        background-color: #F8FAFC !important;
-        color: #64748B !important;
+        background-color: #1A202C;
+        border-radius: 8px;
+        margin-bottom: 2rem;
         padding: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        transition: all 0.2s ease !important;
-        border: 1px solid #E2E8F0 !important;
-        border-bottom: none !important;
     }
+
+    .stTabs [role="tab"] {
+        background-color: #1A202C;
+        color: #CBD5E1;
+        font-weight: 500;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px 8px 0 0;
+        transition: all 0.3s ease;
+    }
+
     .stTabs [aria-selected="true"] {
-        background-color: white !important;
-        color: #1E40AF !important;
-        font-weight: 700 !important;
-        border-bottom: 3px solid #3B82F6 !important;
-        transform: translateY(-1px) !important;
+        background-color: #3B82F6;
+        color: white;
+        margin-bottom: -2px;
     }
-    .stTabs [role="tab"]:hover:not([aria-selected="true"]) {
-        background-color: #F1F5F9 !important;
-        color: #1E293B !important;
+
+    .stTabs [aria-selected="true"]::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background-color: #EF4444;
     }
-    
+
     /* Chart elements */
     .chart-title {
         font-size: 1.4rem;
@@ -303,9 +299,9 @@ st.markdown("""
         font-weight: 500;
     }
     
-    /* Progress bar */
+    /* Progress bar - GREY */
     .stProgress > div > div > div {
-        background-color: #3B82F6;
+        background-color: #4B5563;
         height: 6px !important;
     }
     
@@ -496,53 +492,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Add this to your styling section
-st.markdown("""
-<style>
-    /* Tab container */
-    .stTabs [data-baseweb="tablist"] {
-        background-color: #1A202C;
-        border-radius: 8px;
-        margin-bottom: 2rem;
-    }
-
-    /* Tab items */
-    .stTabs [role="tab"] {
-        background-color: transparent;
-        color: #CBD5E1; /* Light grey for inactive tabs */
-        font-weight: 500;
-        padding: 12px 24px;
-        border: none;
-        border-radius: 8px 8px 0 0;
-        transition: all 0.3s ease;
-    }
-
-    /* Active tab */
-    .stTabs [aria-selected="true"] {
-        background-color: #3B82F6;
-        color: white;
-        margin-bottom: -2px;
-    }
-
-    /* Red underline for active tab */
-    .stTabs [aria-selected="true"]::after {
-        content: "";
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        width: 100%;
-        height: 2px;
-        background-color: #EF4444;
-    }
-
-    /* Progress bar */
-    .stProgress > div > div > div {
-        background-color: #4B5563; /* Dark grey progress bar */
-    }
-</style>
-""", unsafe_allow_html=True)
-
-
 # ======================
 # PAGE CONTENT
 # ======================
@@ -643,9 +592,9 @@ if run:
         progress_bar.progress(10)
         models = get_pricing_models()
         
-        # Validate parameters
+        # Validate parameters - CRITICAL FIX FOR DIVISION BY ZERO
         if S <= 0 or K <= 0 or T <= 0.001 or sigma <= 0.001:
-            st.warning("Invalid parameters detected. Please check input values.")
+            st.warning("Invalid parameters detected. Please check input values. T must be greater than 0.001.")
             st.stop()
         
         # Run benchmarks
