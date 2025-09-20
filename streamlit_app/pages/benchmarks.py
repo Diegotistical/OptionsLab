@@ -1,4 +1,3 @@
-# Option Pricing Model Benchmark Dashboard
 
 # Page 4 Benchmarks.py
 import streamlit as st
@@ -88,6 +87,9 @@ def fallback_black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
         from scipy.stats import norm
         import math
         
+        # Ensure T is not zero to avoid division by zero
+        T = max(T, 0.0001)
+        
         d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
         
@@ -104,6 +106,9 @@ def fallback_black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
 def fallback_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42):
     """Fallback implementation of Monte Carlo pricing"""
     try:
+        # Ensure T is not zero to avoid division by zero
+        T = max(T, 0.0001)
+        
         np.random.seed(seed)
         dt = T / num_steps
         Z = np.random.standard_normal((num_sim, num_steps))
@@ -128,6 +133,9 @@ def fallback_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, n
 def fallback_monte_carlo_unified(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42):
     """Fallback implementation of unified Monte Carlo pricing"""
     try:
+        # Ensure T is not zero to avoid division by zero
+        T = max(T, 0.0001)
+        
         # Same as regular MC for fallback
         return fallback_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed)
     except Exception as e:
@@ -137,6 +145,9 @@ def fallback_monte_carlo_unified(S, K, T, r, sigma, option_type, q=0.0, num_sim=
 def fallback_monte_carlo_ml(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42):
     """Fallback implementation of ML-accelerated Monte Carlo"""
     try:
+        # Ensure T is not zero to avoid division by zero
+        T = max(T, 0.0001)
+        
         # For fallback, just return MC price (no actual ML)
         return fallback_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed)
     except Exception as e:
@@ -148,7 +159,11 @@ def fallback_monte_carlo_ml(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000
 # ======================
 st.markdown("""
 <style>
-    /* Base styling */
+    /* Base styling - full width */
+    body {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
     .main-header {
         font-size: 2.5rem;
         color: #1E293B;
@@ -162,6 +177,20 @@ st.markdown("""
         margin-bottom: 1.5rem;
         opacity: 0.9;
         text-align: center;
+    }
+    
+    /* Full width containers */
+    .stApp {
+        max-width: 100% !important;
+        padding: 0 1rem !important;
+    }
+    .st-emotion-cache-13ln4jf {
+        padding: 0 1rem !important;
+        max-width: 100% !important;
+    }
+    .st-emotion-cache-12oz5g7 {
+        padding: 0 1rem !important;
+        max-width: 100% !important;
     }
     
     /* Metric cards */
@@ -265,7 +294,7 @@ st.markdown("""
     }
     .engine-label {
         font-size: 0.9rem;
-        color: #475569;
+        color: white !important;
         margin-bottom: 0.3rem;
     }
     .engine-value {
@@ -280,7 +309,7 @@ st.markdown("""
         height: 6px !important;
     }
     
-    /* Button styling */
+    /* Button styling - FULL WIDTH */
     .stButton > button {
         background-color: #3B82F6;
         color: white;
@@ -292,6 +321,7 @@ st.markdown("""
         transition: all 0.2s ease;
         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
         width: 100% !important;
+        margin: 0 !important;
     }
     .stButton > button:hover {
         background-color: #2563EB;
@@ -299,12 +329,13 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
-    /* Input field labels */
+    /* Input field labels - WHITE TEXT */
     .stNumberInput > div > label,
     .stSlider > div > label,
     .stSelectbox > div > label {
-        color: #475569 !important;
+        color: white !important;
         font-weight: 500 !important;
+        font-size: 0.9rem !important;
     }
     
     /* Dataframe styling */
@@ -312,10 +343,12 @@ st.markdown("""
         border-radius: 8px;
         overflow: hidden;
         border: 1px solid #E2E8F0;
+        width: 100% !important;
     }
     .stDataFrame > div > div > div > table {
         border-collapse: separate;
         border-spacing: 0;
+        width: 100% !important;
     }
     .stDataFrame > div > div > div > table th {
         background-color: #F8FAFC;
@@ -357,11 +390,11 @@ st.markdown("""
         line-height: 1.3;
     }
     
-    /* Divider styling */
+    /* Divider styling - GREY */
     hr {
         margin: 1.5rem 0;
         border: 0;
-        border-top: 1px solid #E2E8F0;
+        border-top: 1px solid #E2E8F0; /* Light grey */
     }
     
     /* Performance bars */
@@ -441,6 +474,24 @@ st.markdown("""
         padding: 1rem;
         border-radius: 4px;
         margin: 1rem 0;
+    }
+    
+    /* Full width elements */
+    .st-emotion-cache-0 {
+        width: 100% !important;
+    }
+    .st-emotion-cache-1f9epy6 {
+        width: 100% !important;
+    }
+    .st-emotion-cache-ocqkz {
+        width: 100% !important;
+    }
+    .st-emotion-cache-1kyxreq {
+        width: 100% !important;
+        justify-content: flex-start !important;
+    }
+    .st-emotion-cache-1v3fv3r {
+        width: 100% !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -529,8 +580,8 @@ with col3:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Run button centered
-st.markdown('<div style="display: flex; justify-content: center; margin: 1.5rem 0;">', unsafe_allow_html=True)
-run = st.button("Run Benchmarks", type="primary", use_container_width=False)
+st.markdown('<div style="display: flex; justify-content: center; margin: 1.5rem 0; width: 100%;">', unsafe_allow_html=True)
+run = st.button("Run Benchmarks", type="primary", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # Main application logic
@@ -666,8 +717,8 @@ if run:
             progress_bar.progress(60)
             
             try:
-                # First, train the model (one-time cost)
                 if models["mc_ml"] is not None:
+                    # First, train the model (one-time cost)
                     # Create a small training grid
                     grid_S = np.linspace(max(50, S-20), min(200, S+20), 5)
                     grid_K = np.linspace(max(50, K-20), min(200, K+20), 5)
@@ -1337,9 +1388,9 @@ if run:
             <h3 style="color: #B91C1C; margin: 0 0 0.5rem 0;">Troubleshooting Tips</h3>
             <ul style="color: #DC2626; padding-left: 1.2rem; margin-bottom: 0;">
                 <li>Ensure all input values are valid (positive numbers, etc.)</li>
+                <li>Check that T (maturity) is greater than 0.001</li>
                 <li>Try reducing simulation size if performance is poor</li>
                 <li>Check that all required dependencies are installed</li>
-                <li>Verify model availability in your environment</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
