@@ -200,6 +200,7 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 2rem;
         padding: 0 !important;
+        width: 100% !important;
     }
     .stTabs [role="tab"] {
         background-color: #1e293b;
@@ -209,6 +210,8 @@ st.markdown("""
         border: none;
         border-radius: 8px 8px 0 0;
         transition: all 0.3s ease;
+        width: 25% !important;
+        text-align: center;
     }
     .stTabs [aria-selected="true"] {
         background-color: #3b82f6;
@@ -453,12 +456,12 @@ st.markdown("""
     .st-emotion-cache-1f9epy6 {
         width: 100% !important;
     }
-    .st-emotion-cache-ocqkz {
-        width: 100% !important;
-    }
     .st-emotion-cache-1kyxreq {
         width: 100% !important;
         justify-content: flex-start !important;
+    }
+    .st-emotion-cache-ocqkz {
+        width: 100% !important;
     }
     .st-emotion-cache-1v3fv3r {
         width: 100% !important;
