@@ -358,24 +358,23 @@ def create_risk_distribution_plot(returns: pd.Series, var: float, es: float, lev
 # ======================
 
 st.set_page_config(
-    page_title="Financial Analytics Suite", 
-    page_icon="📊", 
+    page_title="Financial Analytics Suite",  
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.markdown('<h1 class="main-header">📊 Financial Analytics Suite</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">Financial Analytics Suite</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Professional-grade option pricing and risk analysis platform</p>', unsafe_allow_html=True)
 
 # Navigation
 st.markdown('<div class="nav-container">', unsafe_allow_html=True)
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
-    option_benchmark_btn = st.button("📈 Option Pricing Benchmarks", use_container_width=True)
+    option_benchmark_btn = st.button("Option Pricing Benchmarks", use_container_width=True)
 with col2:
-    risk_analysis_btn = st.button("🛡️ Risk Analysis Dashboard", use_container_width=True)
+    risk_analysis_btn = st.button("Risk Analysis Dashboard", use_container_width=True)
 with col3:
-    market_insights_btn = st.button("🔍 Market Insights", use_container_width=True, disabled=True)
+    market_insights_btn = st.button("Market Insights", use_container_width=True, disabled=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # Initialize session state for navigation
@@ -529,7 +528,7 @@ if st.session_state.current_page == 'option_benchmark':
 # ======================
 
 elif st.session_state.current_page == 'risk_analysis':
-    st.markdown('<div class="subsection-header">🛡️ Risk Analysis Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subsection-header">Risk Analysis Dashboard</div>', unsafe_allow_html=True)
     
     # Data source selection
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
@@ -689,12 +688,3 @@ elif st.session_state.current_page == 'risk_analysis':
                 st.markdown(f'<span style="color: #ef4444;">{loss:.4%}</span>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
-
-# ======================
-# FOOTER
-# ======================
-
-st.markdown("---")
-st.markdown('<div style="text-align: center; color: #64748b; font-size: 0.9rem;">', unsafe_allow_html=True)
-st.markdown('📊 Financial Analytics Suite • Professional Tools for Quantitative Analysis', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
