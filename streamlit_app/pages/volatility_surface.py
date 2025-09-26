@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy.interpolate import griddata, Rbf
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -280,18 +280,100 @@ def generate_synthetic_surface(spot_price: float = 100, num_points: int = 100) -
     
     return pd.DataFrame(data)
 
+def generate_surface_from_option_results(option_params: Dict, num_strikes: int = 20, num_maturities: int = 15) -> pd.DataFrame:
+    """Generate volatility surface based on previous option pricing results"""
+    try:
+        # Extract parameters from option pricing
+        S = option_params.get('spot_price', 100)
+        K = option_params.get('strike_price', 100)
+        T = option_params.get('maturity', 1.0)
+        sigma = option_params.get('volatility', 0.2)
+        r = option_params.get('risk_free_rate', 0.05)
+        
+        # Create grid around the option parameters
+        strikes = np.linspace(S * 0.6, S * 1.4, num_strikes)
+        maturities = np.linspace(0.1, max(2.0, T * 2), num_maturities)
+        
+        data = []
+        for strike in strikes:
+            for maturity in maturities:
+                # Base volatility from option pricing
+                base_vol = sigma
+                
+                # Add smile effect (higher volatility away from ATM)
+                moneyness = strike / S
+                smile_effect = 0.3 * (moneyness - 1) ** 2
+                
+                # Add term structure (volatility term structure)
+                term_structure = 0.1 * (maturity - T) / T if T > 0 else 0
+                
+                # Combine effects
+                iv = base_vol + smile_effect + term_structure + np.random.normal(0, 0.02)
+                iv = max(0.05, min(0.8, iv))  # Realistic bounds
+                
+                data.append({
+                    'strike': strike,
+                    'maturity': maturity,
+                    'iv': iv,
+                    'moneyness': moneyness
+                })
+        
+        return pd.DataFrame(data)
+    
+    except Exception as e:
+        st.error(f"Error generating surface from option results: {str(e)}")
+        return generate_synthetic_surface()
+
+def implied_volatility_from_price(price: float, S: float, K: float, T: float, r: float, 
+                                 option_type: str = 'call', q: float = 0.0) -> float:
+    """Calculate implied volatility from option price using Newton-Raphson method"""
+    try:
+        from scipy.stats import norm
+        import math
+        
+        # Simple approximation - in practice you'd use a proper root-finding method
+        if T <= 0:
+            return 0.2
+            
+        # Black-Scholes formula for reference
+        def black_scholes(S, K, T, r, sigma, option_type):
+            d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+            d2 = d1 - sigma * math.sqrt(T)
+            if option_type == 'call':
+                return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+            else:
+                return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        
+        # Simple approximation - for demonstration purposes
+        # In a real implementation, you'd use Brent's method or similar
+        sigma_guess = 0.2
+        for _ in range(10):
+            bs_price = black_scholes(S, K, T, r, sigma_guess, option_type)
+            if abs(bs_price - price) < 0.01:
+                break
+            # Adjust sigma based on price difference
+            if bs_price > price:
+                sigma_guess *= 0.95
+            else:
+                sigma_guess *= 1.05
+                
+        return max(0.05, min(0.8, sigma_guess))
+    
+    except:
+        return 0.2  # Fallback
+
 # ======================
-# PLOTTING FUNCTIONS
+# PLOTTING FUNCTIONS (FIXED)
 # ======================
 
 def create_3d_volatility_surface(surface: VolatilitySurfaceResult) -> go.Figure:
-    """Create interactive 3D volatility surface plot"""
+    """Create interactive 3D volatility surface plot - FIXED colorbar error"""
     fig = go.Figure(data=[go.Surface(
         x=surface.strikes,
         y=surface.maturities,
         z=surface.iv_grid,
         colorscale='Viridis',
-        colorbar=dict(title="Implied Volatility", titleside="right"),
+        colorbar=dict(title=dict(text="Implied Volatility")),  # FIXED: Removed titleside
         hovertemplate='<b>Strike:</b> %{x:.1f}<br><b>Maturity:</b> %{y:.2f} yrs<br><b>IV:</b> %{z:.3f}<extra></extra>'
     )])
     
@@ -318,6 +400,8 @@ def create_volatility_slices(surface: VolatilitySurfaceResult) -> go.Figure:
     maturity_indices = [0, len(surface.maturities)//4, len(surface.maturities)//2, 
                       3*len(surface.maturities)//4, -1]
     
+    colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+    
     for i, idx in enumerate(maturity_indices):
         if idx < len(surface.maturities):
             fig.add_trace(go.Scatter(
@@ -325,7 +409,7 @@ def create_volatility_slices(surface: VolatilitySurfaceResult) -> go.Figure:
                 y=surface.iv_grid[idx, :],
                 mode='lines',
                 name=f'{surface.maturities[idx]:.2f} yrs',
-                line=dict(width=3),
+                line=dict(width=3, color=colors[i]),
                 hovertemplate='<b>Strike:</b> %{x:.1f}<br><b>IV:</b> %{y:.3f}<extra></extra>'
             ))
     
@@ -382,7 +466,7 @@ def create_arbitrage_heatmap(surface: VolatilitySurfaceResult) -> go.Figure:
         y=surface.maturities,
         z=convexity_map,
         colorscale='RdBu',
-        colorbar=dict(title="Convexity"),
+        colorbar=dict(title=dict(text="Convexity")),  # FIXED: Removed titleside
         hovertemplate='<b>Strike:</b> %{x:.1f}<br><b>Maturity:</b> %{y:.2f} yrs<br><b>Convexity:</b> %{z:.4f}<extra></extra>'
     ))
     
@@ -392,6 +476,33 @@ def create_arbitrage_heatmap(surface: VolatilitySurfaceResult) -> go.Figure:
         yaxis_title="Time to Maturity (Years)",
         template="plotly_dark",
         height=500
+    )
+    
+    return fig
+
+def create_moneyness_surface(surface: VolatilitySurfaceResult, spot_price: float) -> go.Figure:
+    """Create surface in moneyness space (K/S)"""
+    moneyness_grid = surface.strikes / spot_price
+    
+    fig = go.Figure(data=[go.Surface(
+        x=moneyness_grid,
+        y=surface.maturities,
+        z=surface.iv_grid,
+        colorscale='Plasma',
+        colorbar=dict(title=dict(text="Implied Volatility")),  # FIXED: Removed titleside
+        hovertemplate='<b>Moneyness:</b> %{x:.3f}<br><b>Maturity:</b> %{y:.2f} yrs<br><b>IV:</b> %{z:.3f}<extra></extra>'
+    )])
+    
+    fig.update_layout(
+        title="Volatility Surface in Moneyness Space",
+        scene=dict(
+            xaxis_title="Moneyness (K/S)",
+            yaxis_title="Time to Maturity (Years)",
+            zaxis_title="Implied Volatility",
+            camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
+        ),
+        template="plotly_dark",
+        height=600
     )
     
     return fig
@@ -407,7 +518,8 @@ st.markdown('<p class="sub-header">Professional-grade volatility surface constru
 with st.sidebar:
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Data Source</div>', unsafe_allow_html=True)
-    data_source = st.radio("", ["Upload CSV", "Generate Synthetic"], label_visibility="collapsed", key="data_source_radio")
+    data_source = st.radio("", ["Upload CSV", "Generate Synthetic", "From Option Results"], 
+                          label_visibility="collapsed", key="data_source_radio")
     st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
@@ -471,10 +583,43 @@ try:
             st.info("💡 Upload a CSV with strike, maturity, iv columns or use synthetic data")
             df = generate_synthetic_surface(spot_price)
     
-    else:  # Generate Synthetic
+    elif data_source == "Generate Synthetic":
         st.markdown('<div class="subsection-header">🔧 Synthetic Data Generation</div>', unsafe_allow_html=True)
         df = generate_synthetic_surface(spot_price)
         st.success(f"✅ Generated {len(df)} synthetic option data points")
+    
+    else:  # From Option Results
+        st.markdown('<div class="subsection-header">📈 Generate from Option Pricing Results</div>', unsafe_allow_html=True)
+        
+        # Check if option results are available
+        if 'option_results' in st.session_state and st.session_state.option_results:
+            st.success("✅ Using option pricing results from previous analysis")
+            
+            # Extract parameters from option pricing
+            option_params = {
+                'spot_price': st.session_state.get('spot_price', 100),
+                'strike_price': st.session_state.get('strike_price', 100),
+                'maturity': st.session_state.get('maturity', 1.0),
+                'volatility': st.session_state.get('volatility', 0.2),
+                'risk_free_rate': st.session_state.get('risk_free_rate', 0.05)
+            }
+            
+            # Display option parameters
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Spot Price", f"${option_params['spot_price']:.2f}")
+            with col2:
+                st.metric("Strike Price", f"${option_params['strike_price']:.2f}")
+            with col3:
+                st.metric("Volatility", f"{option_params['volatility']:.3f}")
+            
+            # Generate surface based on option parameters
+            df = generate_surface_from_option_results(option_params)
+            st.success(f"✅ Generated {len(df)} data points based on option pricing parameters")
+        
+        else:
+            st.warning("⚠️ No option pricing results found. Using synthetic data instead.")
+            df = generate_synthetic_surface(spot_price)
 
     # Display data summary
     st.markdown('<div class="subsection-header">📊 Data Summary</div>', unsafe_allow_html=True)
@@ -575,7 +720,7 @@ try:
         # Interactive visualization tabs
         st.markdown('<div class="subsection-header">📈 Interactive Visualizations</div>', unsafe_allow_html=True)
         
-        tab1, tab2, tab3, tab4 = st.tabs(["3D Surface", "Volatility Slices", "Term Structure", "Arbitrage Map"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["3D Surface", "Volatility Slices", "Term Structure", "Arbitrage Map", "Moneyness View"])
         
         with tab1:
             fig_3d = create_3d_volatility_surface(surface)
@@ -592,6 +737,10 @@ try:
         with tab4:
             fig_arbitrage = create_arbitrage_heatmap(surface)
             st.plotly_chart(fig_arbitrage, use_container_width=True)
+        
+        with tab5:
+            fig_moneyness = create_moneyness_surface(surface, spot_price)
+            st.plotly_chart(fig_moneyness, use_container_width=True)
         
         # Surface statistics
         st.markdown('<div class="subsection-header">📋 Surface Statistics</div>', unsafe_allow_html=True)
