@@ -229,20 +229,6 @@ def load_readme(max_lines: int = 80) -> str:
         logger.error(f"Failed to load README: {str(e)}")
         return "_Error loading README_"
 
-# ---------- Sidebar Status ----------
-def show_repo_status() -> None:
-    items = [
-        ("Black–Scholes", "✅" if bs_price else "⚠️"),
-        ("Binomial Tree", "✅" if BinomialTree else "⚠️"),
-        ("Monte Carlo", "✅" if MonteCarloPricer else "⚠️"),
-        ("Monte Carlo ML", "✅" if MonteCarloML else "⚠️"),
-        ("Unified MC (CPU/GPU)", "✅" if MonteCarloPricerUni else "⚠️"),
-        ("VaR/ES", "✅" if (VaRAnalyzer and expected_shortfall) else "⚠️"),
-        ("Vol Surface", "✅" if VolatilitySurfaceGenerator else "⚠️"),
-    ]
-    for name, status in items:
-        st.write(f"{status} {name}")
-
 # ---------- Pricing Wrappers ----------
 def price_black_scholes(S: float, K: float, T: float, r: float, sigma: float, option_type: Literal["call","put"], q: float = 0.0) -> Optional[float]:
     if bs_price is None:
