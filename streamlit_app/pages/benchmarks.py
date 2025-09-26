@@ -83,9 +83,10 @@ def fallback_black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
     try:
         from scipy.stats import norm
         import math
-        # Ensure T is not zero to avoid division by zero
+        # Ensure T and sigma are not zero to avoid division by zero - FIXED
         T = max(T, 0.0001)
-        d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        sigma = max(sigma, 0.0001)
+        d1 = (math.log(S / max(K, 0.0001)) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
         if option_type == "call":
             price = S * math.exp(-q * T) * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
@@ -99,10 +100,11 @@ def fallback_black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
 def fallback_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42):
     """Fallback implementation of Monte Carlo pricing"""
     try:
-        # Ensure T is not zero to avoid division by zero
+        # Ensure T and sigma are not zero to avoid division by zero - FIXED
         T = max(T, 0.0001)
+        sigma = max(sigma, 0.0001)
         np.random.seed(seed)
-        dt = T / num_steps
+        dt = T / max(num_steps, 1)  # Prevent division by zero
         Z = np.random.standard_normal((num_sim, num_steps))
         S_paths = np.zeros((num_sim, num_steps))
         S_paths[:, 0] = S
@@ -124,8 +126,9 @@ def fallback_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, n
 def fallback_monte_carlo_unified(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42):
     """Fallback implementation of unified Monte Carlo pricing"""
     try:
-        # Ensure T is not zero to avoid division by zero
+        # Ensure T and sigma are not zero to avoid division by zero - FIXED
         T = max(T, 0.0001)
+        sigma = max(sigma, 0.0001)
         # Same as regular MC for fallback
         return fallback_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed)
     except Exception as e:
@@ -135,8 +138,9 @@ def fallback_monte_carlo_unified(S, K, T, r, sigma, option_type, q=0.0, num_sim=
 def fallback_monte_carlo_ml(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, num_steps=100, seed=42):
     """Fallback implementation of ML-accelerated Monte Carlo"""
     try:
-        # Ensure T is not zero to avoid division by zero
+        # Ensure T and sigma are not zero to avoid division by zero - FIXED
         T = max(T, 0.0001)
+        sigma = max(sigma, 0.0001)
         # For fallback, just return MC price (no actual ML)
         return fallback_monte_carlo(S, K, T, r, sigma, option_type, q, num_sim, num_steps, seed)
     except Exception as e:
@@ -290,7 +294,7 @@ st.markdown("""
         background-color: #4b5563;
         height: 6px !important;
     }
-    /* Button styling */
+    /* Button styling - FIXED: Full width button */
     .stButton > button {
         background-color: #3b82f6;
         color: white;
@@ -303,6 +307,7 @@ st.markdown("""
         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
         width: 100% !important;
         margin: 0 !important;
+        max-width: 100% !important;
     }
     .stButton > button:hover {
         background-color: #2563eb;
@@ -569,7 +574,7 @@ with col3:
     seed = st.number_input("", value=42, min_value=1, key="seed_bench")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Run button centered
+# Run button centered - FIXED: Full width button
 st.markdown('<div style="display: flex; justify-content: center; margin: 1.5rem 0; width: 100%;">', unsafe_allow_html=True)
 run = st.button("Run Benchmarks", type="primary", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
@@ -587,9 +592,25 @@ if run:
         
         models = get_pricing_models()
         
-        # Validate parameters - CRITICAL FIX FOR DIVISION BY ZERO
-        if S <= 0 or K <= 0 or T <= 0.001 or sigma <= 0.001:
-            st.warning("Invalid parameters detected. Please check input values. T must be greater than 0.001.")
+        # Validate parameters - ENHANCED VALIDATION WITH BETTER ERROR HANDLING
+        validation_errors = []
+        if S <= 0:
+            validation_errors.append("Spot price (S) must be positive")
+        if K <= 0:
+            validation_errors.append("Strike price (K) must be positive")
+        if T <= 0.001:
+            validation_errors.append("Maturity (T) must be greater than 0.001 years")
+        if sigma <= 0.001:
+            validation_errors.append("Volatility (σ) must be greater than 0.001")
+        if r < 0:
+            validation_errors.append("Risk-free rate (r) cannot be negative")
+        if q < 0:
+            validation_errors.append("Dividend yield (q) cannot be negative")
+        
+        if validation_errors:
+            st.error("Parameter validation failed:")
+            for error in validation_errors:
+                st.error(f"• {error}")
             st.stop()
         
         # Run benchmarks
@@ -697,7 +718,7 @@ if run:
         # Monte Carlo ML Benchmark
         if include_mc_ml:
             status_text.text("Running Monte Carlo ML benchmark...")
-            progress_bar.progress(60)
+            progress_bar.progress(80)
             try:
                 if models["mc_ml"] is not None:
                     # First, train the model (one-time cost)
@@ -788,8 +809,9 @@ if run:
             
             # Get error if available
             error_str = "—"
-            if model in price_errors:
-                error_str = f"{price_errors[model.split(' ')[0]]:.6f}"
+            model_key = model.split(' ')[0] if ' ' in model else model
+            if model_key in price_errors:
+                error_str = f"{price_errors[model_key]:.6f}"
             
             display_data.append({
                 "Pricing Model": model,
@@ -878,13 +900,13 @@ if run:
                     # Price comparison chart
                     fig_price = go.Figure()
                     
-                    # Add price points
-                    mc_ml_price = next((r["price"] for r in valid_results if "Monte Carlo ML (Prediction)" in r["model"]), None)
-                    if mc_ml_price is not None:
+                    # Add price points (exclude training phases)
+                    price_results = [r for r in valid_results if "Training" not in r["model"]]
+                    if price_results:
                         fig_price.add_trace(go.Bar(
-                            x=[r["model"] for r in valid_results if "Training" not in r["model"]],
-                            y=[r["price"] for r in valid_results if "Training" not in r["model"]],
-                            marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#10b981' for r in valid_results if "Training" not in r["model"]],
+                            x=[r["model"] for r in price_results],
+                            y=[r["price"] for r in price_results],
+                            marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#10b981' for r in price_results],
                             width=0.6
                         ))
                         
@@ -893,7 +915,7 @@ if run:
                             fig_price.add_shape(
                                 type="line",
                                 x0=-0.5, y0=reference_price,
-                                x1=len(valid_results)-0.5, y1=reference_price,
+                                x1=len(price_results)-0.5, y1=reference_price,
                                 line=dict(color="#f87171", width=2, dash="dash"),
                                 name="Black-Scholes Reference"
                             )
@@ -911,10 +933,12 @@ if run:
                             margin=dict(l=40, r=40, t=40, b=40)
                         )
                         st.plotly_chart(fig_price, use_container_width=True)
+                    else:
+                        st.info("No valid price data available for comparison")
                 
                 with col2:
                     # Time comparison chart - show only prediction times
-                    pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or "Monte Carlo" in r["model"]]
+                    pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"])]
                     pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
                     if pred_results:
                         fig_time = go.Figure()
@@ -949,22 +973,25 @@ if run:
             st.markdown('<p class="chart-description">Detailed analysis of computational efficiency</p>', unsafe_allow_html=True)
             
             # Filter valid time results for prediction phase
-            pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or "Monte Carlo" in r["model"]]
+            pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"])]
             pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
             if pred_results:
-                # Create performance metrics
-                min_time = min(r["time_ms"] for r in pred_results)
-                max_time = max(r["time_ms"] for r in pred_results)
+                # Create performance metrics - FIXED: Ensure no division by zero
+                valid_times = [r["time_ms"] for r in pred_results if r["time_ms"] > 0]
+                if valid_times:
+                    min_time = min(valid_times)
+                    max_time = max(valid_times)
+                else:
+                    min_time = max_time = 0
+                
                 bs_time = next((r["time_ms"] for r in pred_results if "Black-Scholes" in r["model"]), None)
                 
-                # Speedup calculations
+                # Speedup calculations - FIXED: Prevent division by zero
                 speedups = {}
-                if bs_time is not None:
+                if bs_time is not None and bs_time > 0:
                     for r in pred_results:
-                        if "Black-Scholes" not in r["model"]:
-                            # CRITICAL FIX: Prevent division by zero
-                            time_ms = max(r["time_ms"], 1e-10)
-                            speedups[r["model"]] = bs_time / time_ms
+                        if "Black-Scholes" not in r["model"] and r["time_ms"] > 0:
+                            speedups[r["model"]] = bs_time / r["time_ms"]
                 
                 # Create performance metrics
                 st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
@@ -974,17 +1001,25 @@ if run:
                 with col1:
                     st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-title">Fastest Model</div>', unsafe_allow_html=True)
-                    fastest = min(pred_results, key=lambda x: x["time_ms"])
-                    st.markdown(f'<div class="executive-value">{fastest["model"]}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="executive-help">Execution time: {fastest["time_ms"]:.2f} ms</div>', unsafe_allow_html=True)
+                    if pred_results and min_time > 0:
+                        fastest = min(pred_results, key=lambda x: x["time_ms"])
+                        st.markdown(f'<div class="executive-value">{fastest["model"]}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="executive-help">Execution time: {fastest["time_ms"]:.2f} ms</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div class="executive-value">N/A</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="executive-help">No valid timing data</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 with col2:
                     st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-title">Slowest Model</div>', unsafe_allow_html=True)
-                    slowest = max(pred_results, key=lambda x: x["time_ms"])
-                    st.markdown(f'<div class="executive-value">{slowest["model"]}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="executive-help">Execution time: {slowest["time_ms"]:.2f} ms</div>', unsafe_allow_html=True)
+                    if pred_results and max_time > 0:
+                        slowest = max(pred_results, key=lambda x: x["time_ms"])
+                        st.markdown(f'<div class="executive-value">{slowest["model"]}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="executive-help">Execution time: {slowest["time_ms"]:.2f} ms</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div class="executive-value">N/A</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="executive-help">No valid timing data</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 with col3:
@@ -1018,16 +1053,16 @@ if run:
                     st.markdown(f'<span class="model-value">{r["time_ms"]:.2f} ms</span>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Relative performance
-                    if min_time > 0:
+                    # Relative performance - FIXED: Prevent division by zero
+                    if min_time > 0 and r["time_ms"] > 0:
                         st.markdown('<div class="model-detail">', unsafe_allow_html=True)
                         st.markdown('<span>Relative to Fastest</span>', unsafe_allow_html=True)
                         st.markdown(f'<span class="model-value">{r["time_ms"]/min_time:.1f}x</span>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Speedup vs Black-Scholes
-                    if bs_time is not None and "Black-Scholes" not in r["model"]:
-                        speedup = bs_time / max(r["time_ms"], 1e-10)  # CRITICAL FIX: Prevent division by zero
+                    # Speedup vs Black-Scholes - FIXED: Prevent division by zero
+                    if bs_time is not None and bs_time > 0 and "Black-Scholes" not in r["model"] and r["time_ms"] > 0:
+                        speedup = bs_time / r["time_ms"]
                         st.markdown('<div class="model-detail">', unsafe_allow_html=True)
                         st.markdown('<span>Speedup vs Black-Scholes</span>', unsafe_allow_html=True)
                         st.markdown(f'<span class="model-value">{speedup:.1f}x</span>', unsafe_allow_html=True)
@@ -1072,13 +1107,14 @@ if run:
                                f'running <span class="highlight">{best_speedup_model[1]:.1f}x</span> faster than the analytical Black-Scholes solution.</p>', 
                                unsafe_allow_html=True)
                 
-                if len(pred_results) > 1:
+                if len(pred_results) > 1 and min_time > 0:
                     fastest = min(pred_results, key=lambda x: x["time_ms"])
                     slowest = max(pred_results, key=lambda x: x["time_ms"])
-                    st.markdown(f'<p>The fastest model (<span class="highlight">{fastest["model"]}</span>) is '
-                               f'<span class="highlight">{slowest["time_ms"]/fastest["time_ms"]:.1f}x</span> faster '
-                               f'than the slowest model (<span class="highlight">{slowest["model"]}</span>).</p>', 
-                               unsafe_allow_html=True)
+                    if fastest["time_ms"] > 0:
+                        st.markdown(f'<p>The fastest model (<span class="highlight">{fastest["model"]}</span>) is '
+                                   f'<span class="highlight">{slowest["time_ms"]/fastest["time_ms"]:.1f}x</span> faster '
+                                   f'than the slowest model (<span class="highlight">{slowest["model"]}</span>).</p>', 
+                                   unsafe_allow_html=True)
                 
                 st.markdown('<p>For production environments requiring high-frequency pricing, '
                            'the Monte Carlo ML approach provides near-instant predictions after an initial training phase, '
@@ -1100,9 +1136,20 @@ if run:
             valid_results = [r for r in results if isinstance(r["price"], (int, float)) and reference_price is not None]
             valid_results = [r for r in valid_results if "Training" not in r["model"]]
             if valid_results and reference_price is not None:
-                # Calculate errors
-                errors = [(r["model"], abs(r["price"] - reference_price)) for r in valid_results if "Black-Scholes" not in r["model"]]
+                # Calculate errors - FIXED: Ensure meaningful error calculation
+                errors = []
+                for r in valid_results:
+                    if "Black-Scholes" not in r["model"] and reference_price != 0:
+                        error = abs(r["price"] - reference_price)
+                        errors.append((r["model"], error))
+                
                 if errors:
+                    # Create accuracy metrics - FIXED: Prevent division by zero
+                    min_error_val = min(errors, key=lambda x: x[1])[1]
+                    # Ensure we don't divide by zero or very small numbers
+                    min_error_val = max(min_error_val, 1e-10)
+                    error_ratio = max(errors, key=lambda x: x[1])[1] / min_error_val
+                    
                     # Create accuracy metrics
                     st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-summary-title">Accuracy Metrics</div>', unsafe_allow_html=True)
@@ -1127,10 +1174,6 @@ if run:
                     with col3:
                         st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                         st.markdown('<div class="executive-title">Max Error Ratio</div>', unsafe_allow_html=True)
-                        # CRITICAL FIX: Prevent division by zero
-                        min_error_val = min(errors, key=lambda x: x[1])[1]
-                        min_error_val = max(min_error_val, 1e-10)  # Add minimum threshold
-                        error_ratio = max(errors, key=lambda x: x[1])[1] / min_error_val
                         st.markdown(f'<div class="executive-value">{error_ratio:.1f}x</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="executive-help">Least vs most accurate</div>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
@@ -1230,7 +1273,7 @@ if run:
             # Generate strategic insights based on results
             if len(results) > 0:
                 # Identify fastest model (excluding Black-Scholes if present)
-                pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or "Monte Carlo" in r["model"]]
+                pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"])]
                 pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
                 if pred_results:
                     fastest = min(pred_results, key=lambda x: x["time_ms"])
@@ -1351,6 +1394,7 @@ if run:
             <ul style="color: #fca5a5; padding-left: 1.2rem; margin-bottom: 0;">
                 <li>Ensure all input values are valid (positive numbers, etc.)</li>
                 <li>Check that T (maturity) is greater than 0.001</li>
+                <li>Check that volatility (σ) is greater than 0.001</li>
                 <li>Try reducing simulation size if performance is poor</li>
                 <li>Check that all required dependencies are installed</li>
             </ul>
