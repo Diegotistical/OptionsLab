@@ -57,6 +57,12 @@ st.markdown("""
         display: inline-block;
         margin: 0.2rem;
     }
+    .value-breakdown {
+        background: #2d2d2d;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,18 +129,29 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
             intrinsic_value = max(K - S, 0.0)
         time_value = price - intrinsic_value
         
-        # Display results
-        col1, col2, col3 = st.columns([2,1,1])
+        # Display results - FIXED VERSION
+        st.success(f"**Option Price: ${price:.4f}**")
+        
+        # Value breakdown with clean formatting
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.success(f"**Option Price: ${price:.4f}**")
-            st.write(f"**Intrinsic Value: ${intrinsic_value:.4f}** | **Time Value: ${time_value:.4f}**")
-        
+            st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
         with col2:
-            st.metric("Calculation Time", f"{pricing_time:.2f} ms")
-        
+            st.metric("Time Value", f"${time_value:.4f}")
         with col3:
+            moneyness = "ITM" if intrinsic_value > 0 else "ATM" if intrinsic_value == 0 else "OTM"
+            st.metric("Moneyness", moneyness)
+        
+        # Performance metrics
+        perf_col1, perf_col2, perf_col3 = st.columns(3)
+        with perf_col1:
+            st.metric("Calculation Time", f"{pricing_time:.2f} ms")
+        with perf_col2:
             steps_per_ms = num_steps / pricing_time if pricing_time > 0 else float('inf')
             st.metric("Steps/ms", f"{steps_per_ms:.1f}")
+        with perf_col3:
+            total_nodes = ((num_steps + 1) * (num_steps + 2)) // 2
+            st.metric("Total Nodes", f"{total_nodes:,}")
         
         # Performance card
         with st.container():
@@ -147,16 +164,18 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                 st.write("✅ FastMath")
             with perf_col2:
                 st.write("**Tree Statistics**")
-                st.write(f"Nodes: {((num_steps + 1) * (num_steps + 2)) // 2:,}")
-                st.write(f"Steps: {num_steps:,}")
-                st.write(f"Memory: ~{(num_steps ** 2 * 8 / 1e6):.1f} MB")
-            with perf_col3:
-                st.write("**Numerical Precision**")
                 dt = T / num_steps
                 u = np.exp(sigma * np.sqrt(dt))
+                st.write(f"Steps: {num_steps:,}")
                 st.write(f"Δt: {dt:.6f}")
                 st.write(f"u: {u:.6f}")
                 st.write(f"d: {1/u:.6f}")
+            with perf_col3:
+                st.write("**Model Info**")
+                st.write(f"Type: {option_type.title()}") 
+                st.write(f"Exercise: {exercise_style.title()}")
+                st.write(f"Dividend Yield: {q:.2%}")
+                st.write(f"Memory: ~{(num_steps ** 2 * 8 / 1e6):.1f} MB")
             st.markdown('</div>', unsafe_allow_html=True)
         
         # Calculate Greeks if requested
@@ -167,14 +186,17 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
             gamma = bt.gamma(S, K, T, r, sigma, option_type, exercise_style, q, h)
             greek_time = (time.time() - greek_start) * 1000
             
-            greek_col1, greek_col2, greek_col3, greek_col4 = st.columns(4)
+            st.write("**Option Sensitivities:**")
+            greek_col1, greek_col2, greek_col3, greek_col4, greek_col5 = st.columns(5)
             with greek_col1:
                 st.metric("Delta", f"{delta:.4f}", help="Price sensitivity to underlying asset")
             with greek_col2:
                 st.metric("Gamma", f"{gamma:.4f}", help="Delta sensitivity to underlying asset")
             with greek_col3:
-                st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
+                st.metric("Intrinsic Value", f"${intrinsic_value:.4f}", help="Current exercise value")
             with greek_col4:
+                st.metric("Time Value", f"${time_value:.4f}", help="Value from time and volatility")
+            with greek_col5:
                 st.metric("Greeks Time", f"{greek_time:.2f} ms")
         
         # Visualize tree (first 5 steps for clarity)
@@ -297,7 +319,7 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
             # Convergence table
             st.write("**Convergence Data:**")
             df_conv['error'] = abs(df_conv['price'] - price)
-            df_conv['error_pct'] = (df_conv['error'] / price * 100)
+            df_conv['error_pct'] = (df_conv['error'] / price * 100) if price > 0 else 0
             st.dataframe(df_conv.style.format({
                 'price': '${:.4f}',
                 'error': '${:.6f}',
@@ -319,7 +341,7 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
         
         for j in range(num_steps + 1):
             terminal_price = S * (u ** j) * (d ** (num_steps - j))
-            # FIXED: Use math.factorial instead of numpy.math.factorial
+            # Use math.factorial for combinatorial calculation
             prob = (math.factorial(num_steps) / 
                    (math.factorial(j) * math.factorial(num_steps - j))) * (p ** j) * ((1 - p) ** (num_steps - j))
             terminal_prices.append(terminal_price)
@@ -355,20 +377,21 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                 st.write(f"Discount Factor: {np.exp(-r*dt):.6f}")
             
             with info_col2:
-                st.write("**Model Info:**")
-                st.write(f"Steps: {num_steps:,}")
-                st.write(f"Option Type: {option_type.title()}")
-                st.write(f"Exercise: {exercise_style.title()}")
-                st.write(f"Dividend Yield: {q:.2%}")
-                st.write(f"Total Nodes: {((num_steps + 1) * (num_steps + 2)) // 2:,}")
+                st.write("**Option Details:**")
+                st.write(f"Spot Price (S): ${S:.2f}")
+                st.write(f"Strike Price (K): ${K:.2f}")
+                st.write(f"Time to Maturity (T): {T:.2f} years")
+                st.write(f"Volatility (σ): {sigma:.1%}")
+                st.write(f"Risk-Free Rate (r): {r:.1%}")
             
             with info_col3:
-                st.write("**Option Values:**")
-                st.write(f"Price: ${price:.4f}")
-                st.write(f"Intrinsic: ${intrinsic_value:.4f}")
-                st.write(f"Time Value: ${time_value:.4f}")
-                st.write(f"Moneyness: {'ITM' if intrinsic_value > 0 else 'ATM' if intrinsic_value == 0 else 'OTM'}")
+                st.write("**Performance Metrics:**")
                 st.write(f"Pricing Time: {pricing_time:.2f} ms")
+                if calculate_greeks:
+                    st.write(f"Greeks Time: {greek_time:.2f} ms")
+                st.write(f"Steps/ms: {steps_per_ms:.1f}")
+                st.write(f"Total Nodes: {total_nodes:,}")
+                st.write("Numba: ✅ Enabled")
                 
     except Exception as e:
         st.error(f"❌ Error in calculation: {str(e)}")
