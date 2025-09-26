@@ -407,32 +407,32 @@ st.markdown('<p class="sub-header">Professional-grade volatility surface constru
 with st.sidebar:
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Data Source</div>', unsafe_allow_html=True)
-    data_source = st.radio("", ["Upload CSV", "Generate Synthetic"], label_visibility="collapsed")
+    data_source = st.radio("", ["Upload CSV", "Generate Synthetic"], label_visibility="collapsed", key="data_source_radio")
     st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Interpolation Method</div>', unsafe_allow_html=True)
     interpolation_method = st.selectbox("", ["cubic", "linear", "nearest", "rbf"], 
-                                      label_visibility="collapsed")
+                                      label_visibility="collapsed", key="interpolation_method_select")
     st.markdown('</div>', unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     with col1:
         st.markdown('<div class="engine-option">', unsafe_allow_html=True)
         st.markdown('<div class="engine-label">Strike Points</div>', unsafe_allow_html=True)
-        strike_points = st.slider("", 20, 200, 100, label_visibility="collapsed")
+        strike_points = st.slider("", 20, 200, 100, label_visibility="collapsed", key="strike_points_slider")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
         st.markdown('<div class="engine-option">', unsafe_allow_html=True)
         st.markdown('<div class="engine-label">Maturity Points</div>', unsafe_allow_html=True)
-        maturity_points = st.slider("", 20, 200, 100, label_visibility="collapsed")
+        maturity_points = st.slider("", 20, 200, 100, label_visibility="collapsed", key="maturity_points_slider")
         st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Advanced Settings</div>', unsafe_allow_html=True)
-    extrapolate = st.checkbox("Allow Extrapolation", value=False)
-    spot_price = st.number_input("Spot Price", value=100.0, min_value=1.0, max_value=1000.0, step=10.0)
+    extrapolate = st.checkbox("Allow Extrapolation", value=False, key="extrapolate_checkbox")
+    spot_price = st.number_input("Spot Price", value=100.0, min_value=1.0, max_value=1000.0, step=10.0, key="spot_price_input")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Main content area
@@ -442,7 +442,7 @@ try:
         st.markdown('<div class="subsection-header">📤 Data Upload</div>', unsafe_allow_html=True)
         
         uploaded_file = st.file_uploader("Upload option data CSV", type=["csv"],
-                                       help="CSV should contain columns: strike, maturity, iv")
+                                       help="CSV should contain columns: strike, maturity, iv", key="csv_uploader")
         
         if uploaded_file is not None:
             try:
@@ -508,7 +508,7 @@ try:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # Build volatility surface
-    if st.button("🚀 Build Volatility Surface", use_container_width=True):
+    if st.button("🚀 Build Volatility Surface", use_container_width=True, key="build_surface_button"):
         with st.spinner("Constructing volatility surface..."):
             try:
                 surface = build_volatility_surface(
@@ -652,7 +652,8 @@ try:
                 data=csv_data,
                 file_name="volatility_surface.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
+                key="export_csv_button"
             )
         
         with col2:
@@ -685,7 +686,8 @@ IV Range: {surface.iv_grid.min():.3f} - {surface.iv_grid.max():.3f}
                 data=report_text,
                 file_name="volatility_surface_report.txt",
                 mime="text/plain",
-                use_container_width=True
+                use_container_width=True,
+                key="export_report_button"
             )
 
 except Exception as e:
