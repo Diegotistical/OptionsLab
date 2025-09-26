@@ -51,7 +51,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Main content
-st.title("Dashboard")
+st.title("OptionsLab Dashboard")
 st.caption("Pricing • Greeks • Risk • Volatility Surface • Benchmarks")
 
 # Metrics row
@@ -90,4 +90,4 @@ with col2:
 
 st.markdown("---")
 st.subheader("📖 README")
-st.markdown(load_readme(max_lines=30))
+st.markdown(load_readme(max_lines=40))
