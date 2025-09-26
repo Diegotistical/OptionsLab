@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 import sys
+import math  # Import math for factorial function
 from pathlib import Path
 
 # Add src to path
@@ -115,10 +116,18 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
         price = bt.price(S, K, T, r, sigma, option_type, exercise_style, q)
         pricing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
         
+        # Calculate intrinsic and time value
+        if option_type == "call":
+            intrinsic_value = max(S - K, 0.0)
+        else:  # put option
+            intrinsic_value = max(K - S, 0.0)
+        time_value = price - intrinsic_value
+        
         # Display results
         col1, col2, col3 = st.columns([2,1,1])
         with col1:
             st.success(f"**Option Price: ${price:.4f}**")
+            st.write(f"**Intrinsic Value: ${intrinsic_value:.4f}** | **Time Value: ${time_value:.4f}**")
         
         with col2:
             st.metric("Calculation Time", f"{pricing_time:.2f} ms")
@@ -143,8 +152,9 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                 st.write(f"Memory: ~{(num_steps ** 2 * 8 / 1e6):.1f} MB")
             with perf_col3:
                 st.write("**Numerical Precision**")
-                st.write(f"Δt: {T/num_steps:.6f}")
-                u = np.exp(sigma * np.sqrt(T/num_steps))
+                dt = T / num_steps
+                u = np.exp(sigma * np.sqrt(dt))
+                st.write(f"Δt: {dt:.6f}")
                 st.write(f"u: {u:.6f}")
                 st.write(f"d: {1/u:.6f}")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -163,8 +173,7 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
             with greek_col2:
                 st.metric("Gamma", f"{gamma:.4f}", help="Delta sensitivity to underlying asset")
             with greek_col3:
-                intrinsic = max(S - K, 0) if option_type == "call" else max(K - S, 0)
-                st.metric("Intrinsic Value", f"${intrinsic:.4f}")
+                st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
             with greek_col4:
                 st.metric("Greeks Time", f"{greek_time:.2f} ms")
         
@@ -310,8 +319,9 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
         
         for j in range(num_steps + 1):
             terminal_price = S * (u ** j) * (d ** (num_steps - j))
-            prob = (np.math.factorial(num_steps) / 
-                   (np.math.factorial(j) * np.math.factorial(num_steps - j))) * (p ** j) * ((1 - p) ** (num_steps - j))
+            # FIXED: Use math.factorial instead of numpy.math.factorial
+            prob = (math.factorial(num_steps) / 
+                   (math.factorial(j) * math.factorial(num_steps - j))) * (p ** j) * ((1 - p) ** (num_steps - j))
             terminal_prices.append(terminal_price)
             probabilities.append(prob)
         
@@ -353,16 +363,16 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                 st.write(f"Total Nodes: {((num_steps + 1) * (num_steps + 2)) // 2:,}")
             
             with info_col3:
-                st.write("**Performance:**")
+                st.write("**Option Values:**")
+                st.write(f"Price: ${price:.4f}")
+                st.write(f"Intrinsic: ${intrinsic_value:.4f}")
+                st.write(f"Time Value: ${time_value:.4f}")
+                st.write(f"Moneyness: {'ITM' if intrinsic_value > 0 else 'ATM' if intrinsic_value == 0 else 'OTM'}")
                 st.write(f"Pricing Time: {pricing_time:.2f} ms")
-                if calculate_greeks:
-                    st.write(f"Greeks Time: {greek_time:.2f} ms")
-                st.write(f"Steps/ms: {steps_per_ms:.1f}")
-                st.write("Numba: ✅ Enabled")
-                st.write("Vectorization: ✅ Enabled")
                 
     except Exception as e:
         st.error(f"❌ Error in calculation: {str(e)}")
+        st.info("Check the console for detailed error information")
 
 # Theory and Numba information
 with st.expander("📚 Binomial Tree Theory & Numba Optimization"):
