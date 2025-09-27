@@ -1,9 +1,8 @@
 # streamlit_vol_surface_prod_visual_greeks.py
 """
 Production-ready Volatility Surface Visual Explorer with Greeks & Animation
-- Enhanced import system for Windows paths
-- Fixed training data scope issue
-- Robust module detection
+- Direct import fixes for your specific module structure
+- Enhanced error handling
 """
 
 import streamlit as st
@@ -24,16 +23,10 @@ import hashlib
 import math
 
 # =============================
-# Enhanced Import System for Windows Paths
+# Enhanced Import System
 # =============================
 
 # Optional external imports
-try:
-    from joblib import Parallel, delayed
-    JOBLIB_AVAILABLE = True
-except Exception:
-    JOBLIB_AVAILABLE = False
-
 try:
     from scipy.stats import norm
 except Exception:
@@ -54,27 +47,17 @@ if not logger.handlers:
     logger.addHandler(h)
 
 # =============================
-# Advanced Import System
+# Direct Import Strategy for Your Specific Structure
 # =============================
 def setup_import_paths():
-    """Enhanced path setup specifically for your Windows directory structure"""
-    current_file = Path(__file__).resolve()
-    
-    # Your specific path from the error
-    your_specific_path = Path(r"D:\Coding\Python\OptionsLab\src")
-    if your_specific_path.exists():
-        if str(your_specific_path) not in sys.path:
-            sys.path.insert(0, str(your_specific_path))
-            logger.info(f"Added your specific path: {your_specific_path}")
-    
-    # Also try common locations
+    """Direct path setup for your specific structure"""
+    # Try multiple possible source locations
     possible_paths = [
-        current_file.parents[1] / "src",
-        current_file.parent / "src",
+        Path("/mount/src/optionslab/src"),
         Path.cwd() / "src",
         Path.cwd().parent / "src",
-        Path(r"D:\Coding\Python\OptionsLab\src"),  # Your exact path
-        Path(r"D:/Coding/Python/OptionsLab/src"),  # Forward slashes
+        Path(__file__).parent / "src",
+        Path(__file__).parent.parent / "src",
     ]
     
     added_paths = []
@@ -84,128 +67,105 @@ def setup_import_paths():
             added_paths.append(str(path))
             logger.info(f"Added to sys.path: {path}")
     
+    # Also add current working directory
+    if str(Path.cwd()) not in sys.path:
+        sys.path.insert(0, str(Path.cwd()))
+        added_paths.append(str(Path.cwd()))
+    
     return added_paths
 
-# Setup paths immediately
 added_paths = setup_import_paths()
 logger.info(f"Current sys.path: {sys.path}")
 
 # =============================
-# Robust Import Helper
+# Direct Import Functions
 # =============================
-def robust_import(module_name, class_name=None, alternative_paths=None):
-    """
-    Try multiple strategies to import modules
-    """
+def try_direct_import(module_path, class_name=None):
+    """Try direct import with multiple strategies"""
     strategies = []
     
-    # Strategy 1: Direct import
     if class_name:
-        strategies.append(f"from {module_name} import {class_name}")
+        # Strategy 1: Direct import
+        strategies.append(f"from {module_path} import {class_name}")
+        # Strategy 2: Try without volatility_surface prefix
+        if module_path.startswith("volatility_surface."):
+            short_path = module_path.replace("volatility_surface.", "")
+            strategies.append(f"from {short_path} import {class_name}")
     else:
-        strategies.append(f"import {module_name}")
-    
-    # Strategy 2: Try with src prefix
-    if class_name:
-        strategies.append(f"from src.{module_name} import {class_name}")
-    else:
-        strategies.append(f"import src.{module_name}")
-    
-    # Strategy 3: Try alternative paths
-    if alternative_paths:
-        for alt in alternative_paths:
-            if class_name:
-                strategies.append(f"from {alt}.{module_name} import {class_name}")
-            else:
-                strategies.append(f"import {alt}.{module_name}")
+        strategies.append(f"import {module_path}")
+        if module_path.startswith("volatility_surface."):
+            short_path = module_path.replace("volatility_surface.", "")
+            strategies.append(f"import {short_path}")
     
     for strategy in strategies:
         try:
             if strategy.startswith("from"):
                 parts = strategy.split()
-                module_path = parts[1]
+                module_name = parts[1]
                 attr_name = parts[3]
-                module = __import__(module_path, fromlist=[attr_name])
+                module = __import__(module_name, fromlist=[attr_name])
                 result = getattr(module, attr_name)
-                logger.info(f"✓ Successfully imported {attr_name} using: {strategy}")
+                logger.info(f"✓ Imported {attr_name} via: {strategy}")
                 return result
             else:
                 module_name = strategy.split()[1]
                 module = __import__(module_name, fromlist=['*'])
-                logger.info(f"✓ Successfully imported {module_name}")
+                logger.info(f"✓ Imported {module_name}")
                 return module
-        except ImportError as e:
-            logger.debug(f"Strategy failed {strategy}: {e}")
-            continue
         except Exception as e:
-            logger.debug(f"Error with strategy {strategy}: {e}")
+            logger.debug(f"Failed {strategy}: {e}")
             continue
     
-    logger.warning(f"❌ All import strategies failed for {module_name}.{class_name if class_name else ''}")
+    logger.warning(f"❌ All import strategies failed for {module_path}.{class_name if class_name else ''}")
     return None
 
 # =============================
-# Import Models with Enhanced Detection
+# Import Specific Modules
 # =============================
-def import_all_models():
-    """Import all volatility surface models with detailed logging"""
-    models = {}
-    
-    # Define all model imports
-    model_imports = {
-        "VolatilitySurfaceGenerator": ("volatility_surface.surface_generator", "VolatilitySurfaceGenerator"),
-        "MLPModel": ("volatility_surface.models.mlp_model", "MLPModel"),
-        "RandomForestVolatilityModel": ("volatility_surface.models.random_forest", "RandomForestVolatilityModel"),
-        "SVRModel": ("volatility_surface.models.svr_model", "SVRModel"),
-        "XGBoostModel": ("volatility_surface.models.xgboost_model", "XGBoostModel"),
-    }
-    
-    module_imports = {
-        "feature_engineering": "volatility_surface.utils.feature_engineering",
-        "arbitrage_checks": "volatility_surface.utils.arbitrage_checks",
-        "arbitrage_enforcement": "volatility_surface.utils.arbitrage_enforcement",
-        "grid_search": "volatility_surface.utils.grid_search",
-    }
-    
-    # Import models
-    for name, (module_path, class_name) in model_imports.items():
-        models[name] = robust_import(module_path, class_name, 
-                                   alternative_paths=["volatility_surface", "src.volatility_surface"])
-    
-    # Import modules
-    for name, module_path in module_imports.items():
-        models[name] = robust_import(module_path, alternative_paths=["volatility_surface", "src.volatility_surface"])
-    
-    return models
+logger.info("=== ATTEMPTING IMPORTS ===")
 
-# Import everything
-imported_models = import_all_models()
+# Import core modules
+VolatilitySurfaceGenerator = try_direct_import("volatility_surface.surface_generator", "VolatilitySurfaceGenerator")
 
-# Assign to global variables
-VolatilitySurfaceGenerator = imported_models.get("VolatilitySurfaceGenerator")
-MLPModel = imported_models.get("MLPModel")
-RandomForestVolatilityModel = imported_models.get("RandomForestVolatilityModel")
-SVRModel = imported_models.get("SVRModel")
-XGBoostModel = imported_models.get("XGBoostModel")
-feature_engineering_module = imported_models.get("feature_engineering")
-arbitrage_checks_module = imported_models.get("arbitrage_checks")
-arbitrage_enforcement_module = imported_models.get("arbitrage_enforcement")
-grid_search_module = imported_models.get("grid_search")
+# Import models with individual error handling
+MLPModel = None
+RandomForestVolatilityModel = None  
+SVRModel = None
+XGBoostModel = None
 
-# Log import status
-logger.info("=== IMPORT STATUS ===")
-for name, obj in [
-    ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator),
-    ("MLPModel", MLPModel),
-    ("RandomForest", RandomForestVolatilityModel),
-    ("SVR", SVRModel),
-    ("XGBoost", XGBoostModel),
-    ("feature_engineering", feature_engineering_module),
-    ("arbitrage_checks", arbitrage_checks_module),
-    ("arbitrage_enforcement", arbitrage_enforcement_module)
-]:
-    status = "✓" if obj is not None else "✗"
-    logger.info(f"{status} {name}")
+try:
+    from volatility_surface.models.mlp_model import MLPModel
+    logger.info("✓ Direct import: MLPModel")
+except Exception as e:
+    logger.warning(f"MLPModel import failed: {e}")
+    MLPModel = try_direct_import("volatility_surface.models.mlp_model", "MLPModel")
+
+try:
+    from volatility_surface.models.random_forest import RandomForestVolatilityModel
+    logger.info("✓ Direct import: RandomForestVolatilityModel")
+except Exception as e:
+    logger.warning(f"RandomForest import failed: {e}")
+    RandomForestVolatilityModel = try_direct_import("volatility_surface.models.random_forest", "RandomForestVolatilityModel")
+
+try:
+    from volatility_surface.models.svr_model import SVRModel
+    logger.info("✓ Direct import: SVRModel")
+except Exception as e:
+    logger.warning(f"SVRModel import failed: {e}")
+    SVRModel = try_direct_import("volatility_surface.models.svr_model", "SVRModel")
+
+try:
+    from volatility_surface.models.xgboost_model import XGBoostModel
+    logger.info("✓ Direct import: XGBoostModel")
+except Exception as e:
+    logger.warning(f"XGBoostModel import failed: {e}")
+    XGBoostModel = try_direct_import("volatility_surface.models.xgboost_model", "XGBoostModel")
+
+# Import utility modules
+feature_engineering_module = try_direct_import("volatility_surface.utils.feature_engineering")
+arbitrage_checks_module = try_direct_import("volatility_surface.utils.arbitrage_checks")
+arbitrage_enforcement_module = try_direct_import("volatility_surface.utils.arbitrage_enforcement")
+grid_search_module = try_direct_import("volatility_surface.utils.grid_search")
 
 # =============================
 # DummyModel Fallback
@@ -215,16 +175,14 @@ class DummyModel:
         self.params = kwargs or {}
         self.feature_names_in_ = ["moneyness","log_moneyness","time_to_maturity","ttm_squared","risk_free_rate","historical_volatility","volatility_skew"]
         self.name = "DummyModel"
-        self.is_trained = False
+        self.is_trained = True  # Dummy model is always "trained"
         
     def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
-        logger.info("DummyModel.train called")
+        logger.info("DummyModel.train called (no-op)")
         self.is_trained = True
         return {"train_rmse": 0.1, "val_rmse": 0.12, "val_r2": 0.85, "note": "Dummy model - no real training"}
     
     def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
-        if not self.is_trained:
-            logger.warning("DummyModel not trained, returning simple surface")
         # simple smile function based on moneyness & ttm
         m = df["moneyness"].to_numpy()
         t = df["time_to_maturity"].to_numpy()
@@ -232,48 +190,60 @@ class DummyModel:
         smile = 0.03 * (m - 1.0) ** 2
         return np.clip(base + smile, 0.03, 0.6)
 
-# Enhanced Model Factory
+# =============================
+# Model Factory with Better Error Handling
+# =============================
 def create_model_instance(name: str, **kwargs):
-    """Create model instance with better error handling"""
-    cls_map = {
+    """Create model instance with comprehensive error handling"""
+    model_map = {
         "MLP Neural Network": MLPModel,
-        "Random Forest": RandomForestVolatilityModel,
+        "Random Forest": RandomForestVolatilityModel, 
         "SVR": SVRModel,
         "XGBoost": XGBoostModel
     }
     
-    cls = cls_map.get(name)
+    model_class = model_map.get(name)
     
-    if cls is None:
-        logger.info(f"Using DummyModel for {name}")
+    if model_class is None:
+        logger.info(f"Using DummyModel for {name} - no class found")
         return DummyModel(**kwargs)
     
     try:
         logger.info(f"Attempting to create {name} instance")
-        instance = cls(**kwargs)
+        instance = model_class(**kwargs)
         logger.info(f"✓ Successfully created {name} instance")
         return instance
     except Exception as e:
-        logger.error(f"Failed to create {name}: {e}")
+        logger.error(f"Failed to create {name} instance: {e}")
         logger.info("Falling back to DummyModel")
         return DummyModel(**kwargs)
 
 # Get available models
 MODEL_NAMES = ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"]
 AVAILABLE_MODELS = []
+
 for name in MODEL_NAMES:
-    cls = {
+    model_class = {
         "MLP Neural Network": MLPModel,
         "Random Forest": RandomForestVolatilityModel,
         "SVR": SVRModel,
         "XGBoost": XGBoostModel
     }.get(name)
-    if cls is not None:
-        AVAILABLE_MODELS.append(name)
+    
+    if model_class is not None:
+        # Test if we can actually instantiate the model
+        try:
+            temp_instance = model_class()
+            AVAILABLE_MODELS.append(name)
+            del temp_instance
+        except Exception as e:
+            logger.warning(f"Model {name} found but cannot be instantiated: {e}")
 
 if not AVAILABLE_MODELS:
     AVAILABLE_MODELS = ["DummyModel"]
-    logger.info("No custom models available, using DummyModel only")
+    logger.info("No working models found, using DummyModel only")
+
+logger.info(f"Available models: {AVAILABLE_MODELS}")
 
 # =============================
 # UI Configuration and Styling
@@ -361,30 +331,34 @@ def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_en
 def safe_model_predict_volatility(model: Any, df: pd.DataFrame) -> np.ndarray:
     """Safe prediction with comprehensive error handling"""
     try:
-        # Check if model needs training
+        # For DummyModel or models without training requirement
+        if hasattr(model, 'is_trained') and model.is_trained:
+            if hasattr(model, "predict_volatility"):
+                return model.predict_volatility(df)
+            elif hasattr(model, "predict"):
+                return model.predict(df)
+        
+        # For models that require training
         if hasattr(model, '_assert_trained'):
             try:
                 model._assert_trained()
+                if hasattr(model, "predict_volatility"):
+                    return model.predict_volatility(df)
+                elif hasattr(model, "predict"):
+                    return model.predict(df)
             except Exception as e:
                 logger.warning(f"Model not trained, using fallback: {e}")
-                return np.full(len(df), 0.2)
         
-        if hasattr(model, "predict_volatility"):
-            out = model.predict_volatility(df)
-        elif hasattr(model, "predict"):
-            out = model.predict(df)
-        else:
-            out = model(df) if callable(model) else np.full(len(df), 0.2)
+        # Fallback: simple surface
+        m = df["moneyness"].to_numpy()
+        t = df["time_to_maturity"].to_numpy()
+        base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
+        smile = 0.03 * (m - 1.0) ** 2
+        return np.clip(base + smile, 0.03, 0.6)
         
-        out = np.asarray(out).astype(float).ravel()
-        if out.shape[0] != len(df):
-            if out.size == 1:
-                return np.full(len(df), float(out))
-            out = np.resize(out, len(df))
-        return out
     except Exception as e:
         logger.error(f"Model prediction failed: {e}")
-        # Return a reasonable fallback surface
+        # Final fallback
         m = df["moneyness"].to_numpy()
         t = df["time_to_maturity"].to_numpy()
         base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
@@ -518,6 +492,21 @@ def synthetic_true_surface(M, T):
     smile = 0.03 * (M - 1.0) ** 2
     return np.clip(base + smile + 0.02 * np.exp(-T), 0.03, 0.6)
 
+def compute_and_plot_greeks(M, T, Z_pred, option_type="call", spot_assumption=100.0, r=0.03, q=0.0, h_frac=1e-3):
+    delta_grid, gamma_grid = compute_greeks_from_iv_grid(M, T, Z_pred, option_type, spot_assumption, r, q, h_frac)
+    
+    delta_fig = go.Figure(go.Surface(x=M, y=T, z=delta_grid, colorscale="RdBu"))
+    delta_fig.update_layout(title="Delta Surface", template="plotly_dark", 
+                           scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Delta"), 
+                           height=500)
+    
+    gamma_fig = go.Figure(go.Surface(x=M, y=T, z=gamma_grid, colorscale="RdBu"))
+    gamma_fig.update_layout(title="Gamma Surface", template="plotly_dark", 
+                           scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Gamma"), 
+                           height=500)
+    
+    return delta_grid, gamma_grid, delta_fig, gamma_fig
+
 # =============================
 # Main Application
 # =============================
@@ -535,7 +524,7 @@ def main():
     st.markdown("""
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
         <h1 style="color: white; margin: 0; font-size: 2.5rem;">📊 Volatility Surface Explorer</h1>
-        <p style="color: white; opacity: 0.9; font-size: 1.1rem;">Enhanced import system with Windows path support</p>
+        <p style="color: white; opacity: 0.9; font-size: 1.1rem;">Fixed Import System</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -543,8 +532,20 @@ def main():
     with st.expander("🔧 Debug Information", expanded=False):
         st.write("**Python Path:**", sys.executable)
         st.write("**Working Directory:**", Path.cwd())
-        st.write("**Added Paths:**", added_paths)
         st.write("**Available Models:**", AVAILABLE_MODELS)
+        st.write("**Import Status:**")
+        
+        modules = [
+            ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator),
+            ("MLPModel", MLPModel),
+            ("RandomForest", RandomForestVolatilityModel),
+            ("SVRModel", SVRModel),
+            ("XGBoostModel", XGBoostModel),
+        ]
+        
+        for name, obj in modules:
+            status = "✅ Available" if obj is not None else "❌ Not Available"
+            st.write(f"- {name}: {status}")
     
     # Configuration Section
     st.markdown('<div class="section">', unsafe_allow_html=True)
@@ -554,9 +555,8 @@ def main():
     
     with col1:
         use_generator = st.checkbox("Use Surface Generator", 
-                                   value=VolatilitySurfaceGenerator is not None and VolatilitySurfaceGenerator is not None,
-                                   disabled=VolatilitySurfaceGenerator is None,
-                                   help="Use advanced surface generator when available")
+                                   value=VolatilitySurfaceGenerator is not None,
+                                   disabled=VolatilitySurfaceGenerator is None)
         n_samples = st.slider("Dataset Size", 200, 5000, 1500, step=100)
         
     with col2:
@@ -574,28 +574,37 @@ def main():
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Generate training data FIRST (before any model operations)
+    # Data Generation Section
     st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 📊 Training Data")
+    st.markdown("### 📊 Data Management")
     
-    if st.button("🔄 Generate Training Data", use_container_width=True):
-        with st.spinner("Generating training data..."):
-            if use_generator and VolatilitySurfaceGenerator is not None:
-                df = generate_surface_data_via_generator(n_samples)
-            else:
-                df = generate_fallback_data(n_samples)
-            st.session_state['training_data'] = df
-            st.success(f"Generated {len(df)} training samples")
+    col5, col6 = st.columns(2)
     
-    # Display data info if available
+    with col5:
+        if st.button("🔄 Generate Training Data", use_container_width=True):
+            with st.spinner("Generating training data..."):
+                if use_generator and VolatilitySurfaceGenerator is not None:
+                    df = generate_surface_data_via_generator(n_samples)
+                else:
+                    df = generate_fallback_data(n_samples)
+                st.session_state['training_data'] = df
+                st.success(f"Generated {len(df)} training samples")
+    
+    with col6:
+        if st.button("🗑️ Clear Cache", use_container_width=True):
+            st.session_state['pred_cache'] = {}
+            st.session_state['training_data'] = None
+            st.session_state.pop('last_trained', None)
+            st.rerun()
+    
+    # Display data info
     if st.session_state['training_data'] is not None:
         df = st.session_state['training_data']
-        st.write(f"**Training Data Ready:** {len(df)} samples")
-        st.write(f"**Columns:** {list(df.columns)}")
-        st.write(f"**IV Range:** {df['implied_volatility'].min():.3f} - {df['implied_volatility'].max():.3f}")
+        st.info(f"**Training Data Ready:** {len(df)} samples")
     else:
-        st.warning("No training data generated yet. Click the button above to generate data.")
-        df = generate_fallback_data(1000)  # Fallback for initial display
+        st.warning("No training data generated yet. Click 'Generate Training Data' first.")
+        # Create minimal fallback data for UI
+        df = generate_fallback_data(100)
     
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -603,61 +612,54 @@ def main():
     st.markdown('<div class="section">', unsafe_allow_html=True)
     st.markdown("### 🤖 Model Training")
     
-    col5, col6 = st.columns([2, 1])
+    col7, col8 = st.columns([2, 1])
     
-    with col5:
-        st.markdown("**Module Status:**")
-        modules = [
-            ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator),
-            ("MLP Model", MLPModel),
-            ("Random Forest", RandomForestVolatilityModel),
-            ("SVR Model", SVRModel),
-            ("XGBoost", XGBoostModel)
-        ]
+    with col7:
+        st.markdown("**Model Status:**")
+        model_class = {
+            "MLP Neural Network": MLPModel,
+            "Random Forest": RandomForestVolatilityModel,
+            "SVR": SVRModel,
+            "XGBoost": XGBoostModel
+        }.get(viz_model)
         
-        for name, obj in modules:
-            status_class = "status-available" if obj is not None else "status-unavailable"
-            icon = "✅" if obj is not None else "❌"
-            st.markdown(f'<div class="model-status {status_class}">{icon} {name}</div>', unsafe_allow_html=True)
+        if model_class is not None:
+            st.success(f"✅ {viz_model} model class is available")
+        else:
+            st.warning(f"⚠️ {viz_model} model class not found, using DummyModel")
     
-    with col6:
+    with col8:
         if st.button("🚀 Train Model", use_container_width=True, 
                     disabled=st.session_state['training_data'] is None):
-            if st.session_state['training_data'] is None:
-                st.error("Please generate training data first!")
-            else:
-                with st.spinner("Training model..."):
-                    df = st.session_state['training_data']
-                    mdl = create_model_instance(viz_model)
-                    try:
-                        # Check if model has train method
-                        if hasattr(mdl, 'train'):
-                            metrics = mdl.train(df, val_split=0.2)
-                        else:
-                            metrics = {"note": "Model does not require training"}
-                        
-                        st.session_state['last_trained'] = (viz_model, mdl, metrics)
-                        st.success("Training completed successfully!")
-                        if metrics:
-                            st.json(metrics)
-                    except Exception as e:
-                        st.error(f"Training failed: {str(e)}")
-                        st.info("Using untrained model with fallback predictions")
-                        st.session_state['last_trained'] = (viz_model, mdl, {"error": str(e)})
-        
-        if st.button("🔄 Clear Cache", use_container_width=True):
-            st.session_state['pred_cache'] = {}
-            st.rerun()
+            with st.spinner("Training model..."):
+                df = st.session_state['training_data']
+                mdl = create_model_instance(viz_model)
+                
+                try:
+                    # Check if model has train method
+                    if hasattr(mdl, 'train'):
+                        metrics = mdl.train(df, val_split=0.2)
+                        st.success("✅ Training completed successfully!")
+                        st.json(metrics)
+                    else:
+                        metrics = {"note": "Model does not require training"}
+                        st.info("ℹ️ Model does not require training")
+                    
+                    st.session_state['last_trained'] = (viz_model, mdl, metrics)
+                    
+                except Exception as e:
+                    st.error(f"❌ Training failed: {str(e)}")
+                    st.session_state['last_trained'] = (viz_model, mdl, {"error": str(e)})
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Model Instance Selection
+    # Model Instance
     if 'last_trained' in st.session_state and st.session_state['last_trained'][0] == viz_model:
         model_instance = st.session_state['last_trained'][1]
-        st.info(f"Using trained {viz_model} model")
+        st.success("Using trained model instance")
     else:
         model_instance = create_model_instance(viz_model)
-        st.info(f"Using new {viz_model} instance (not trained)")
+        st.info("Using new model instance (may not be trained)")
     
     # Visualization Section
     st.markdown('<div class="section">', unsafe_allow_html=True)
@@ -666,10 +668,9 @@ def main():
     vis_options = ["3D Surface", "Heatmap", "Greeks (Delta/Gamma)"]
     vis_choice = st.selectbox("Visualization Type", vis_options, index=0)
     
-    # Build prediction grid
+    # Build prediction grid and get predictions
     M_grid, T_grid, grid_df = build_prediction_grid(0.7, 1.3, m_steps, 0.05, 2.0, t_steps)
     
-    # Get predictions
     ck = cache_key(viz_model, getattr(model_instance, "params", {}), m_steps, t_steps)
     
     if ck in st.session_state['pred_cache']:
@@ -702,10 +703,10 @@ def main():
             delta_grid, gamma_grid, delta_fig, gamma_fig = compute_and_plot_greeks(
                 M_grid, T_grid, Z_pred, option_type, spot_assumption, r, q)
         
-        col7, col8 = st.columns(2)
-        with col7:
+        col9, col10 = st.columns(2)
+        with col9:
             st.plotly_chart(delta_fig, use_container_width=True)
-        with col8:
+        with col10:
             st.plotly_chart(gamma_fig, use_container_width=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
@@ -714,51 +715,28 @@ def main():
     st.markdown('<div class="section">', unsafe_allow_html=True)
     st.markdown("### 📊 Performance Metrics")
     
-    col9, col10, col11, col12 = st.columns(4)
+    col11, col12, col13, col14 = st.columns(4)
     
-    with col9:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    with col11:
         st.metric("IV Min", f"{np.nanmin(Z_pred):.4f}")
         st.metric("IV Mean", f"{np.nanmean(Z_pred):.4f}")
-        st.markdown('</div>', unsafe_allow_html=True)
     
-    with col10:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    with col12:
         st.metric("IV Max", f"{np.nanmax(Z_pred):.4f}")
         rmse = np.sqrt(np.nanmean((Z_pred - Z_true) ** 2))
         st.metric("RMSE", f"{rmse:.6f}")
-        st.markdown('</div>', unsafe_allow_html=True)
     
-    with col11:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    with col13:
         st.metric("Grid Size", f"{m_steps}×{t_steps}")
         data_size = len(st.session_state['training_data']) if st.session_state['training_data'] is not None else 0
         st.metric("Data Points", f"{data_size:,}")
-        st.markdown('</div>', unsafe_allow_html=True)
     
-    with col12:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.markdown("**Model Info**")
-        st.text(f"Type: {viz_model}")
-        st.text(f"Trained: {'Yes' if 'last_trained' in st.session_state else 'No'}")
-        st.markdown('</div>', unsafe_allow_html=True)
+    with col14:
+        st.metric("Model", viz_model)
+        trained_status = "Yes" if 'last_trained' in st.session_state else "No"
+        st.metric("Trained", trained_status)
     
     st.markdown('</div>', unsafe_allow_html=True)
-
-def compute_and_plot_greeks(M, T, Z_pred, option_type="call", spot_assumption=100.0, r=0.03, q=0.0, h_frac=1e-3):
-    delta_grid, gamma_grid = compute_greeks_from_iv_grid(M, T, Z_pred, option_type, spot_assumption, r, q, h_frac)
-    
-    delta_fig = go.Figure(go.Surface(x=M, y=T, z=delta_grid, colorscale="RdBu"))
-    delta_fig.update_layout(title="Delta Surface", template="plotly_dark", 
-                           scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Delta"), 
-                           height=500)
-    
-    gamma_fig = go.Figure(go.Surface(x=M, y=T, z=gamma_grid, colorscale="RdBu"))
-    gamma_fig.update_layout(title="Gamma Surface", template="plotly_dark", 
-                           scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Gamma"), 
-                           height=500)
-    
-    return delta_grid, gamma_grid, delta_fig, gamma_fig
 
 if __name__ == "__main__":
     main()
