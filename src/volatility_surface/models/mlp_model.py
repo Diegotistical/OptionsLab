@@ -16,7 +16,7 @@ from sklearn.model_selection import train_test_split
 
 from ..base import VolatilityModelBase
 from ..utils.feature_engineering import engineer_features
-from ..utils.tensor_utils import ensuretensor
+from ..utils.tensor_utils import ensure_tensor
 
 
 FEATURE_COLUMNS = [
