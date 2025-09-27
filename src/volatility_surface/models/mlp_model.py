@@ -13,9 +13,9 @@ from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 import plotly.graph_objects as go
 
-from ..base import VolatilityModelBase
-from ..utils.feature_engineering import engineer_features
-from ..utils.tensor_utils import ensure_tensor
+from volatility_surface.base import VolatilityModelBase
+from volatility_surface.utils.feature_engineering import engineer_features
+from volatility_surface.utils.tensor_utils import ensure_tensor
 
 FEATURE_COLUMNS = [
     'moneyness', 'log_moneyness', 'time_to_maturity',
@@ -247,8 +247,12 @@ class MLPModel(VolatilityModelBase, nn.Module):
                 self.train_history = {"train_loss": [], "val_loss": []}
             self.trained = True
 
-    def _predict_impl(self, df: pd.DataFrame, **kwargs) -> np.ndarray:
-        """
-        Internal method used by VolatilityModelBase to make predictions.
-        """
-        return self.predict_volatility(df, **kwargs)
+    def _predict_impl(self, X: Any) -> Any:
+            """
+            Implementation of the abstract method from VolatilityModelBase.
+            Converts input to tensor, passes through network, returns numpy array.
+            """
+            X_tensor = ensure_tensor(X, dtype=torch.float32)
+            with torch.no_grad():
+                y_pred = self.model(X_tensor)
+            return y_pred.numpy()
