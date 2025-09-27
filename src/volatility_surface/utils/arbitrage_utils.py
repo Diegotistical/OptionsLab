@@ -32,6 +32,14 @@ def check_arbitrage_violations(vol_surface: np.ndarray, S: np.ndarray, K: np.nda
         'butterfly_spread_violation': butterfly_violation
     }
 
-def validate_domain(*args, **kwargs):
-    """Dummy function to prevent import errors."""
+# volatility_surface/utils/arbitrage_utils.py
+
+def validate_domain(x):
+    """
+    Dummy placeholder function to validate input domain
+    """
+    # Make sure x doesn't have negative values
+    if (x < 0).any():
+        raise ValueError("Valores negativos no permitidos en input")
     return True
+
