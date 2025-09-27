@@ -246,3 +246,9 @@ class MLPModel(VolatilityModelBase, nn.Module):
             except FileNotFoundError:
                 self.train_history = {"train_loss": [], "val_loss": []}
             self.trained = True
+
+    def _predict_impl(self, df: pd.DataFrame, **kwargs) -> np.ndarray:
+        """
+        Internal method used by VolatilityModelBase to make predictions.
+        """
+        return self.predict_volatility(df, **kwargs)
