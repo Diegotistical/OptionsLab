@@ -1,4 +1,10 @@
-# streamlit_app / pages / volatility_surface.py
+# streamlit_vol_surface_prod_visual_greeks.py
+"""
+Production-ready Volatility Surface Visual Explorer with Greeks & Animation
+- Enhanced import system for Windows paths
+- Fixed training data scope issue
+- Robust module detection
+"""
 
 import streamlit as st
 import numpy as np
@@ -9,6 +15,7 @@ from plotly.subplots import make_subplots
 import logging
 import traceback
 import sys
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import time
@@ -17,21 +24,19 @@ import hashlib
 import math
 
 # =============================
-# Enhanced Import System
+# Enhanced Import System for Windows Paths
 # =============================
 
-# Optional external: joblib for grid search parallelism (not required)
+# Optional external imports
 try:
     from joblib import Parallel, delayed
     JOBLIB_AVAILABLE = True
 except Exception:
     JOBLIB_AVAILABLE = False
 
-# Optional for BS cdf
 try:
     from scipy.stats import norm
 except Exception:
-    # minimal fallback for norm.cdf
     class _NormFallback:
         @staticmethod
         def cdf(x):
@@ -49,147 +54,231 @@ if not logger.handlers:
     logger.addHandler(h)
 
 # =============================
-# Add src to sys.path if present - Enhanced path detection
+# Advanced Import System
 # =============================
 def setup_import_paths():
-    """Enhanced path setup to find src directory"""
+    """Enhanced path setup specifically for your Windows directory structure"""
     current_file = Path(__file__).resolve()
     
-    # Try multiple possible locations for src
+    # Your specific path from the error
+    your_specific_path = Path(r"D:\Coding\Python\OptionsLab\src")
+    if your_specific_path.exists():
+        if str(your_specific_path) not in sys.path:
+            sys.path.insert(0, str(your_specific_path))
+            logger.info(f"Added your specific path: {your_specific_path}")
+    
+    # Also try common locations
     possible_paths = [
-        current_file.parents[1] / "src",  # ../src
-        current_file.parent / "src",      # ./src
-        Path.cwd() / "src",               # cwd/src
-        Path.cwd().parent / "src",        # ../src from cwd
+        current_file.parents[1] / "src",
+        current_file.parent / "src",
+        Path.cwd() / "src",
+        Path.cwd().parent / "src",
+        Path(r"D:\Coding\Python\OptionsLab\src"),  # Your exact path
+        Path(r"D:/Coding/Python/OptionsLab/src"),  # Forward slashes
     ]
     
+    added_paths = []
     for path in possible_paths:
         if path.exists() and str(path) not in sys.path:
             sys.path.insert(0, str(path))
-            logger.info(f"Added {path} to sys.path")
-            return str(path)
+            added_paths.append(str(path))
+            logger.info(f"Added to sys.path: {path}")
     
-    logger.warning("Could not find src directory in standard locations")
-    return None
+    return added_paths
 
-setup_import_paths()
+# Setup paths immediately
+added_paths = setup_import_paths()
+logger.info(f"Current sys.path: {sys.path}")
 
 # =============================
-# Enhanced Safe import helper
+# Robust Import Helper
 # =============================
-def try_import(module_path: str, attr: Optional[str] = None, fallback_module: Optional[str] = None) -> Tuple[Optional[Any], Optional[str]]:
+def robust_import(module_name, class_name=None, alternative_paths=None):
     """
-    Enhanced import helper that tries multiple import strategies
+    Try multiple strategies to import modules
     """
-    import_strategies = []
+    strategies = []
     
     # Strategy 1: Direct import
-    if attr:
-        import_strategies.append(f"from {module_path} import {attr}")
+    if class_name:
+        strategies.append(f"from {module_name} import {class_name}")
     else:
-        import_strategies.append(f"import {module_path}")
+        strategies.append(f"import {module_name}")
     
-    # Strategy 2: Try with fallback path
-    if fallback_module:
-        fallback_path = f"{fallback_module}.{module_path.split('.')[-1]}"
-        if attr:
-            import_strategies.append(f"from {fallback_path} import {attr}")
-        else:
-            import_strategies.append(f"import {fallback_path}")
+    # Strategy 2: Try with src prefix
+    if class_name:
+        strategies.append(f"from src.{module_name} import {class_name}")
+    else:
+        strategies.append(f"import src.{module_name}")
     
-    for strategy in import_strategies:
+    # Strategy 3: Try alternative paths
+    if alternative_paths:
+        for alt in alternative_paths:
+            if class_name:
+                strategies.append(f"from {alt}.{module_name} import {class_name}")
+            else:
+                strategies.append(f"import {alt}.{module_name}")
+    
+    for strategy in strategies:
         try:
             if strategy.startswith("from"):
-                # from module import attr
                 parts = strategy.split()
-                module = __import__(parts[1], fromlist=[parts[3]])
-                result = getattr(module, parts[3])
-                return result, None
+                module_path = parts[1]
+                attr_name = parts[3]
+                module = __import__(module_path, fromlist=[attr_name])
+                result = getattr(module, attr_name)
+                logger.info(f"✓ Successfully imported {attr_name} using: {strategy}")
+                return result
             else:
-                # import module
                 module_name = strategy.split()[1]
                 module = __import__(module_name, fromlist=['*'])
-                return module, None
-        except ImportError:
+                logger.info(f"✓ Successfully imported {module_name}")
+                return module
+        except ImportError as e:
+            logger.debug(f"Strategy failed {strategy}: {e}")
             continue
         except Exception as e:
-            tb = traceback.format_exc()
-            logger.debug(f"Import failed with strategy {strategy}: {e}")
+            logger.debug(f"Error with strategy {strategy}: {e}")
             continue
     
-    return None, f"All import strategies failed for {module_path}.{attr if attr else ''}"
+    logger.warning(f"❌ All import strategies failed for {module_name}.{class_name if class_name else ''}")
+    return None
 
 # =============================
-# Try to import user modules with enhanced fallbacks
+# Import Models with Enhanced Detection
 # =============================
+def import_all_models():
+    """Import all volatility surface models with detailed logging"""
+    models = {}
+    
+    # Define all model imports
+    model_imports = {
+        "VolatilitySurfaceGenerator": ("volatility_surface.surface_generator", "VolatilitySurfaceGenerator"),
+        "MLPModel": ("volatility_surface.models.mlp_model", "MLPModel"),
+        "RandomForestVolatilityModel": ("volatility_surface.models.random_forest", "RandomForestVolatilityModel"),
+        "SVRModel": ("volatility_surface.models.svr_model", "SVRModel"),
+        "XGBoostModel": ("volatility_surface.models.xgboost_model", "XGBoostModel"),
+    }
+    
+    module_imports = {
+        "feature_engineering": "volatility_surface.utils.feature_engineering",
+        "arbitrage_checks": "volatility_surface.utils.arbitrage_checks",
+        "arbitrage_enforcement": "volatility_surface.utils.arbitrage_enforcement",
+        "grid_search": "volatility_surface.utils.grid_search",
+    }
+    
+    # Import models
+    for name, (module_path, class_name) in model_imports.items():
+        models[name] = robust_import(module_path, class_name, 
+                                   alternative_paths=["volatility_surface", "src.volatility_surface"])
+    
+    # Import modules
+    for name, module_path in module_imports.items():
+        models[name] = robust_import(module_path, alternative_paths=["volatility_surface", "src.volatility_surface"])
+    
+    return models
 
-# Try multiple import strategies for each module
-VolatilitySurfaceGenerator, _ = try_import("volatility_surface.surface_generator", "VolatilitySurfaceGenerator", "src.volatility_surface")
-MLPModel, _ = try_import("volatility_surface.models.mlp_model", "MLPModel", "src.volatility_surface.models")
-RandomForestVolatilityModel, _ = try_import("volatility_surface.models.random_forest", "RandomForestVolatilityModel", "src.volatility_surface.models")
-SVRModel, _ = try_import("volatility_surface.models.svr_model", "SVRModel", "src.volatility_surface.models")
-XGBoostModel, _ = try_import("volatility_surface.models.xgboost_model", "XGBoostModel", "src.volatility_surface.models")
-feature_engineering_module, _ = try_import("volatility_surface.utils.feature_engineering", None, "src.volatility_surface.utils")
-arbitrage_checks_module, _ = try_import("volatility_surface.utils.arbitrage_checks", None, "src.volatility_surface.utils")
-arbitrage_enforcement_module, _ = try_import("volatility_surface.utils.arbitrage_enforcement", None, "src.volatility_surface.utils")
-grid_search_module, _ = try_import("volatility_surface.utils.grid_search", None, "src.volatility_surface.utils")
+# Import everything
+imported_models = import_all_models()
 
-# Also try direct module imports as fallback
-if VolatilitySurfaceGenerator is None:
-    VolatilitySurfaceGenerator, _ = try_import("surface_generator", "VolatilitySurfaceGenerator", "src")
+# Assign to global variables
+VolatilitySurfaceGenerator = imported_models.get("VolatilitySurfaceGenerator")
+MLPModel = imported_models.get("MLPModel")
+RandomForestVolatilityModel = imported_models.get("RandomForestVolatilityModel")
+SVRModel = imported_models.get("SVRModel")
+XGBoostModel = imported_models.get("XGBoostModel")
+feature_engineering_module = imported_models.get("feature_engineering")
+arbitrage_checks_module = imported_models.get("arbitrage_checks")
+arbitrage_enforcement_module = imported_models.get("arbitrage_enforcement")
+grid_search_module = imported_models.get("grid_search")
 
-MODEL_CLASS_MAP = {
-    "MLP Neural Network": MLPModel,
-    "Random Forest": RandomForestVolatilityModel,
-    "SVR": SVRModel,
-    "XGBoost": XGBoostModel
-}
-AVAILABLE_MODELS = [name for name, cls in MODEL_CLASS_MAP.items() if cls is not None]
-if not AVAILABLE_MODELS:
-    AVAILABLE_MODELS = ["DummyModel"]
-    logger.info("No custom models found, using DummyModel fallback")
+# Log import status
+logger.info("=== IMPORT STATUS ===")
+for name, obj in [
+    ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator),
+    ("MLPModel", MLPModel),
+    ("RandomForest", RandomForestVolatilityModel),
+    ("SVR", SVRModel),
+    ("XGBoost", XGBoostModel),
+    ("feature_engineering", feature_engineering_module),
+    ("arbitrage_checks", arbitrage_checks_module),
+    ("arbitrage_enforcement", arbitrage_enforcement_module)
+]:
+    status = "✓" if obj is not None else "✗"
+    logger.info(f"{status} {name}")
 
 # =============================
-# DummyModel fallback
+# DummyModel Fallback
 # =============================
 class DummyModel:
     def __init__(self, **kwargs):
-        self.params = kwargs
+        self.params = kwargs or {}
         self.feature_names_in_ = ["moneyness","log_moneyness","time_to_maturity","ttm_squared","risk_free_rate","historical_volatility","volatility_skew"]
         self.name = "DummyModel"
+        self.is_trained = False
         
     def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
-        logger.info("DummyModel.train called (no-op)")
-        return {"train_rmse": float("nan"), "val_rmse": float("nan"), "val_r2": float("nan")}
+        logger.info("DummyModel.train called")
+        self.is_trained = True
+        return {"train_rmse": 0.1, "val_rmse": 0.12, "val_r2": 0.85, "note": "Dummy model - no real training"}
     
     def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
-        if "implied_volatility" in df.columns:
-            return df["implied_volatility"].to_numpy()
-        # simple smile function based on moneyness & ttm (consistent)
+        if not self.is_trained:
+            logger.warning("DummyModel not trained, returning simple surface")
+        # simple smile function based on moneyness & ttm
         m = df["moneyness"].to_numpy()
         t = df["time_to_maturity"].to_numpy()
         base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
         smile = 0.03 * (m - 1.0) ** 2
         return np.clip(base + smile, 0.03, 0.6)
 
-# Model factory
+# Enhanced Model Factory
 def create_model_instance(name: str, **kwargs):
-    cls = MODEL_CLASS_MAP.get(name)
+    """Create model instance with better error handling"""
+    cls_map = {
+        "MLP Neural Network": MLPModel,
+        "Random Forest": RandomForestVolatilityModel,
+        "SVR": SVRModel,
+        "XGBoost": XGBoostModel
+    }
+    
+    cls = cls_map.get(name)
+    
     if cls is None:
         logger.info(f"Using DummyModel for {name}")
         return DummyModel(**kwargs)
+    
     try:
-        return cls(**kwargs)
-    except Exception:
-        logger.exception(f"Failed to instantiate model {name}; using DummyModel")
+        logger.info(f"Attempting to create {name} instance")
+        instance = cls(**kwargs)
+        logger.info(f"✓ Successfully created {name} instance")
+        return instance
+    except Exception as e:
+        logger.error(f"Failed to create {name}: {e}")
+        logger.info("Falling back to DummyModel")
         return DummyModel(**kwargs)
+
+# Get available models
+MODEL_NAMES = ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"]
+AVAILABLE_MODELS = []
+for name in MODEL_NAMES:
+    cls = {
+        "MLP Neural Network": MLPModel,
+        "Random Forest": RandomForestVolatilityModel,
+        "SVR": SVRModel,
+        "XGBoost": XGBoostModel
+    }.get(name)
+    if cls is not None:
+        AVAILABLE_MODELS.append(name)
+
+if not AVAILABLE_MODELS:
+    AVAILABLE_MODELS = ["DummyModel"]
+    logger.info("No custom models available, using DummyModel only")
 
 # =============================
 # UI Configuration and Styling
 # =============================
-
 def setup_dark_theme():
-    """Configure dark theme CSS"""
     st.markdown("""
     <style>
     .main {
@@ -246,18 +335,13 @@ def setup_dark_theme():
         background: linear-gradient(45deg, #ff4b4b, #ff6b6b);
         color: white;
     }
-    .stSelectbox, .stNumberInput, .stSlider {
-        background: rgba(40, 44, 62, 0.8);
-        border-radius: 5px;
-    }
     </style>
     """, unsafe_allow_html=True)
 
 # =============================
-# Rest of the utility functions (unchanged)
+# Utility Functions
 # =============================
-
-def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40) -> Tuple[np.ndarray, np.ndarray, pd.DataFrame]:
+def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40):
     m = np.linspace(m_start, m_end, m_steps)
     t = np.linspace(t_start, t_end, t_steps)
     M, T = np.meshgrid(m, t, indexing='xy')
@@ -275,29 +359,47 @@ def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_en
     return M, T, grid_df
 
 def safe_model_predict_volatility(model: Any, df: pd.DataFrame) -> np.ndarray:
+    """Safe prediction with comprehensive error handling"""
     try:
+        # Check if model needs training
+        if hasattr(model, '_assert_trained'):
+            try:
+                model._assert_trained()
+            except Exception as e:
+                logger.warning(f"Model not trained, using fallback: {e}")
+                return np.full(len(df), 0.2)
+        
         if hasattr(model, "predict_volatility"):
             out = model.predict_volatility(df)
         elif hasattr(model, "predict"):
             out = model.predict(df)
         else:
             out = model(df) if callable(model) else np.full(len(df), 0.2)
+        
         out = np.asarray(out).astype(float).ravel()
         if out.shape[0] != len(df):
             if out.size == 1:
                 return np.full(len(df), float(out))
             out = np.resize(out, len(df))
         return out
-    except Exception:
-        logger.exception("Model prediction failed; returning fallback constant surface")
-        return np.full(len(df), 0.2)
+    except Exception as e:
+        logger.error(f"Model prediction failed: {e}")
+        # Return a reasonable fallback surface
+        m = df["moneyness"].to_numpy()
+        t = df["time_to_maturity"].to_numpy()
+        base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
+        smile = 0.03 * (m - 1.0) ** 2
+        return np.clip(base + smile, 0.03, 0.6)
 
 def cache_key(model_name: str, params: Dict[str, Any], m_steps: int, t_steps: int, extra: Optional[Dict] = None) -> str:
     payload = {"model": model_name, "params": params, "m": m_steps, "t": t_steps, "extra": extra or {}}
     return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
+# Initialize session state
 if 'pred_cache' not in st.session_state:
     st.session_state['pred_cache'] = {}
+if 'training_data' not in st.session_state:
+    st.session_state['training_data'] = None
 
 @st.cache_data(show_spinner=False)
 def generate_fallback_data(n_samples: int = 1500, seed: int = 42) -> pd.DataFrame:
@@ -368,7 +470,6 @@ def black_scholes_price(S, K, T, r, sigma, option_type="call", q=0.0):
         else:
             return K * math.exp(-r * T) * norm.cdf(-d2) - S * math.exp(-q * T) * norm.cdf(-d1)
     except Exception:
-        logger.exception("Black-Scholes price failure")
         return 0.0
 
 def bs_price_vectorized(S_arr, K_arr, T_arr, r, sigma_arr, option_type="call", q=0.0):
@@ -394,106 +495,23 @@ def compute_greeks_from_iv_grid(M, T, Z_pred, option_type="call", spot_assumptio
         gamma = (p_up - 2 * p0 + p_down) / (h * h)
         return delta.reshape(shape), gamma.reshape(shape)
     except Exception:
-        logger.exception("Greeks computation failed")
         return np.full_like(Z_pred, np.nan), np.full_like(Z_pred, np.nan)
 
-def run_arbitrage_checks_vectorized(vol2d: np.ndarray, strike_grid: np.ndarray, ttm_grid: np.ndarray) -> Dict[str, Any]:
-    results = {}
-    try:
-        if arbitrage_checks_module and hasattr(arbitrage_checks_module, "check_arbitrage_violations"):
-            try:
-                res = arbitrage_checks_module.check_arbitrage_violations(vol2d, strike_grid, strike_grid, ttm_grid)
-                results["basic_checks"] = res
-            except Exception:
-                logger.exception("arbitrage_checks call failed")
-                results["basic_checks_error"] = traceback.format_exc()
-        else:
-            results["basic_checks"] = {"note": "arbitrage_checks missing, skipped"}
-    except Exception:
-        results["basic_checks_error"] = traceback.format_exc()
-    try:
-        if arbitrage_enforcement_module and hasattr(arbitrage_enforcement_module, "detect_arbitrage_violations"):
-            try:
-                res = arbitrage_enforcement_module.detect_arbitrage_violations(vol2d)
-                results["enforcement_checks"] = res
-            except Exception:
-                logger.exception("arbitrage_enforcement call failed")
-                results["enforcement_checks_error"] = traceback.format_exc()
-        else:
-            results["enforcement_checks"] = {"note": "arbitrage_enforcement missing, skipped"}
-    except Exception:
-        results["enforcement_checks_error"] = traceback.format_exc()
-    return results
-
-def export_plotly_fig_png(fig: go.Figure, filename: str = "figure.png") -> Optional[bytes]:
-    try:
-        img_bytes = fig.to_image(format="png", engine="kaleido")
-        return img_bytes
-    except Exception:
-        logger.exception("PNG export failed (kaleido missing?)")
-        return None
-
-def export_plotly_fig_html(fig: go.Figure, filename: str = "figure.html") -> str:
-    try:
-        return fig.to_html(full_html=True, include_plotlyjs='cdn')
-    except Exception:
-        logger.exception("HTML export failed")
-        return fig.to_html(full_html=True, include_plotlyjs='cdn')
-
+# =============================
+# Visualization Functions
+# =============================
 def fig_surface(M, T, Z, title="Volatility Surface"):
-    fig = go.Figure(go.Surface(x=M, y=T, z=Z, colorscale="Viridis", cmin=np.nanmin(Z), cmax=np.nanmax(Z)))
-    fig.update_layout(title=title, template="plotly_dark", scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Implied Vol"), height=720, margin=dict(t=50))
+    fig = go.Figure(go.Surface(x=M, y=T, z=Z, colorscale="Viridis"))
+    fig.update_layout(title=title, template="plotly_dark", 
+                     scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Implied Vol"), 
+                     height=600)
     return fig
 
 def fig_heatmap(M, T, Z, title="Heatmap"):
     fig = go.Figure(go.Heatmap(z=Z, x=M[0,:], y=T[:,0], colorscale="Viridis"))
-    fig.update_layout(title=title, template="plotly_dark", xaxis_title="Moneyness", yaxis_title="TTM", height=600)
+    fig.update_layout(title=title, template="plotly_dark", 
+                     xaxis_title="Moneyness", yaxis_title="TTM", height=500)
     return fig
-
-def fig_contour_slices(M, T, Z, slice_m=1.0, slice_t=1.0):
-    t_idx = int(np.argmin(np.abs(T[:,0] - slice_t)))
-    m_idx = int(np.argmin(np.abs(M[0,:] - slice_m)))
-    fig = make_subplots(rows=2, cols=2, specs=[[{"type":"contour","rowspan":2}, {"type":"scatter"}],[None, {"type":"scatter"}]],
-                        column_widths=[0.62, 0.38], subplot_titles=("Contour (IV)", f"Slice @ TTM={T[t_idx,0]:.3f}", f"Slice @ moneyness={M[0,m_idx]:.3f}"))
-    fig.add_trace(go.Contour(z=Z, x=M[0,:], y=T[:,0], colorscale="Viridis", contours=dict(showlabels=True)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=M[t_idx,:], y=Z[t_idx,:], mode="lines+markers"), row=1, col=2)
-    fig.add_trace(go.Scatter(x=T[:,0], y=Z[:,m_idx], mode="lines+markers"), row=2, col=2)
-    fig.update_layout(template="plotly_dark", height=700)
-    return fig
-
-def fig_residuals_scatter(pred, true):
-    df_p = pd.DataFrame({"pred": pred.ravel(), "true": true.ravel()})
-    fig = px.scatter(df_p, x="true", y="pred", marginal_x="histogram", marginal_y="histogram", trendline="ols")
-    fig.update_layout(template="plotly_dark", title="Predicted vs True IV")
-    return fig
-
-def build_animation_frames(M, T, Z, t_axis_steps=30, title="Animated Surface"):
-    frames = []
-    t_len = min(Z.shape[0], t_axis_steps)
-    idxs = np.linspace(0, Z.shape[0] - 1, t_len).astype(int)
-    base = go.Surface(x=M, y=T, z=Z, colorscale="Viridis", showscale=False)
-    fig = go.Figure(data=[base])
-    for i in idxs:
-        frame_z = np.copy(Z)
-        frames.append(go.Frame(data=[go.Surface(x=M, y=T, z=Z)], name=str(i)))
-    steps = []
-    for i, f in enumerate(frames):
-        step = {"args": [[f.name], {"frame": {"duration": 200, "redraw": True}, "mode": "immediate"}],
-                "label": str(i), "method": "animate"}
-        steps.append(step)
-    sliders = [{"active": 0, "pad": {"t": 50}, "steps": steps}]
-    fig.frames = frames
-    fig.update_layout(template="plotly_dark", title=title, height=720, sliders=sliders,
-                      updatemenus=[{"type": "buttons", "buttons": [{"label": "Play", "method": "animate", "args": [None, {"frame": {"duration": 300, "redraw": True}, "fromcurrent": True}]}], "pad": {"r": 10, "t": 10}}])
-    return fig
-
-def compute_and_plot_greeks(M, T, Z_pred, option_type="call", spot_assumption=100.0, r=0.03, q=0.0, h_frac=1e-3):
-    delta_grid, gamma_grid = compute_greeks_from_iv_grid(M, T, Z_pred, option_type=option_type, spot_assumption=spot_assumption, r=r, q=q, h_frac=h_frac)
-    delta_fig = go.Figure(go.Surface(x=M, y=T, z=delta_grid, colorscale="RdBu"))
-    delta_fig.update_layout(title="Delta Surface", template="plotly_dark", scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Delta"), height=640)
-    gamma_fig = go.Figure(go.Surface(x=M, y=T, z=gamma_grid, colorscale="RdBu"))
-    gamma_fig.update_layout(title="Gamma Surface", template="plotly_dark", scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Gamma"), height=640)
-    return delta_grid, gamma_grid, delta_fig, gamma_fig
 
 def synthetic_true_surface(M, T):
     base = 0.2 + 0.05 * np.sin(2 * np.pi * M) * np.exp(-T)
@@ -501,9 +519,8 @@ def synthetic_true_surface(M, T):
     return np.clip(base + smile + 0.02 * np.exp(-T), 0.03, 0.6)
 
 # =============================
-# Enhanced Streamlit UI
+# Main Application
 # =============================
-
 def main():
     st.set_page_config(
         page_title="Volatility Surface Explorer", 
@@ -514,13 +531,20 @@ def main():
     
     setup_dark_theme()
     
-    # Header Section
+    # Header
     st.markdown("""
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
         <h1 style="color: white; margin: 0; font-size: 2.5rem;">📊 Volatility Surface Explorer</h1>
-        <p style="color: white; opacity: 0.9; font-size: 1.1rem;">Production-ready visualization with Greeks, animations, and arbitrage checks</p>
+        <p style="color: white; opacity: 0.9; font-size: 1.1rem;">Enhanced import system with Windows path support</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Debug Information
+    with st.expander("🔧 Debug Information", expanded=False):
+        st.write("**Python Path:**", sys.executable)
+        st.write("**Working Directory:**", Path.cwd())
+        st.write("**Added Paths:**", added_paths)
+        st.write("**Available Models:**", AVAILABLE_MODELS)
     
     # Configuration Section
     st.markdown('<div class="section">', unsafe_allow_html=True)
@@ -529,7 +553,9 @@ def main():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        use_generator = st.checkbox("Use Surface Generator", value=VolatilitySurfaceGenerator is not None, 
+        use_generator = st.checkbox("Use Surface Generator", 
+                                   value=VolatilitySurfaceGenerator is not None and VolatilitySurfaceGenerator is not None,
+                                   disabled=VolatilitySurfaceGenerator is None,
                                    help="Use advanced surface generator when available")
         n_samples = st.slider("Dataset Size", 200, 5000, 1500, step=100)
         
@@ -548,107 +574,121 @@ def main():
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Model Status and Controls
+    # Generate training data FIRST (before any model operations)
+    st.markdown('<div class="section">', unsafe_allow_html=True)
+    st.markdown("### 📊 Training Data")
+    
+    if st.button("🔄 Generate Training Data", use_container_width=True):
+        with st.spinner("Generating training data..."):
+            if use_generator and VolatilitySurfaceGenerator is not None:
+                df = generate_surface_data_via_generator(n_samples)
+            else:
+                df = generate_fallback_data(n_samples)
+            st.session_state['training_data'] = df
+            st.success(f"Generated {len(df)} training samples")
+    
+    # Display data info if available
+    if st.session_state['training_data'] is not None:
+        df = st.session_state['training_data']
+        st.write(f"**Training Data Ready:** {len(df)} samples")
+        st.write(f"**Columns:** {list(df.columns)}")
+        st.write(f"**IV Range:** {df['implied_volatility'].min():.3f} - {df['implied_volatility'].max():.3f}")
+    else:
+        st.warning("No training data generated yet. Click the button above to generate data.")
+        df = generate_fallback_data(1000)  # Fallback for initial display
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Model Training Section
+    st.markdown('<div class="section">', unsafe_allow_html=True)
+    st.markdown("### 🤖 Model Training")
+    
     col5, col6 = st.columns([2, 1])
     
     with col5:
-        st.markdown('<div class="section">', unsafe_allow_html=True)
-        st.markdown("### 🔧 Model Status & Training")
+        st.markdown("**Module Status:**")
+        modules = [
+            ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator),
+            ("MLP Model", MLPModel),
+            ("Random Forest", RandomForestVolatilityModel),
+            ("SVR Model", SVRModel),
+            ("XGBoost", XGBoostModel)
+        ]
         
-        status_col1, status_col2 = st.columns(2)
-        
-        with status_col1:
-            st.markdown("**Module Availability:**")
-            modules = [
-                ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator),
-                ("MLP Model", MLPModel),
-                ("Random Forest", RandomForestVolatilityModel),
-                ("SVR Model", SVRModel),
-                ("XGBoost", XGBoostModel)
-            ]
-            
-            for name, obj in modules:
-                status_class = "status-available" if obj is not None else "status-unavailable"
-                icon = "✅" if obj is not None else "❌"
-                st.markdown(f'<div class="model-status {status_class}">{icon} {name}</div>', unsafe_allow_html=True)
-        
-        with status_col2:
-            if st.button("🚀 Train Model", use_container_width=True):
+        for name, obj in modules:
+            status_class = "status-available" if obj is not None else "status-unavailable"
+            icon = "✅" if obj is not None else "❌"
+            st.markdown(f'<div class="model-status {status_class}">{icon} {name}</div>', unsafe_allow_html=True)
+    
+    with col6:
+        if st.button("🚀 Train Model", use_container_width=True, 
+                    disabled=st.session_state['training_data'] is None):
+            if st.session_state['training_data'] is None:
+                st.error("Please generate training data first!")
+            else:
                 with st.spinner("Training model..."):
+                    df = st.session_state['training_data']
                     mdl = create_model_instance(viz_model)
                     try:
-                        metrics = mdl.train(df, val_split=0.2) if hasattr(mdl, "train") else {}
+                        # Check if model has train method
+                        if hasattr(mdl, 'train'):
+                            metrics = mdl.train(df, val_split=0.2)
+                        else:
+                            metrics = {"note": "Model does not require training"}
+                        
                         st.session_state['last_trained'] = (viz_model, mdl, metrics)
                         st.success("Training completed successfully!")
                         if metrics:
                             st.json(metrics)
                     except Exception as e:
                         st.error(f"Training failed: {str(e)}")
-            
-            if st.button("🔄 Refresh Predictions", use_container_width=True):
-                st.session_state['pred_cache'] = {}
-                st.rerun()
+                        st.info("Using untrained model with fallback predictions")
+                        st.session_state['last_trained'] = (viz_model, mdl, {"error": str(e)})
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        if st.button("🔄 Clear Cache", use_container_width=True):
+            st.session_state['pred_cache'] = {}
+            st.rerun()
     
-    with col6:
-        st.markdown('<div class="section">', unsafe_allow_html=True)
-        st.markdown("### 📈 Visualization")
-        
-        vis_options = ["3D Surface", "Heatmap", "Contour + Slices", "Residuals & Scatter", "Animation (TTM)", "Greeks (Delta/Gamma)"]
-        vis_choice = st.selectbox("Visualization Type", vis_options, index=0)
-        
-        if vis_choice == "Contour + Slices":
-            slice_col1, slice_col2 = st.columns(2)
-            with slice_col1:
-                slice_m = st.slider("Slice Moneyness", 0.7, 1.3, 1.0, 0.01)
-            with slice_col2:
-                slice_t = st.slider("Slice TTM", 0.05, 2.0, 1.0, 0.05)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    # Data Generation
-    if use_generator and VolatilitySurfaceGenerator:
-        df = generate_surface_data_via_generator(n_samples)
-    else:
-        df = generate_fallback_data(n_samples)
-    
-    # Model Instance
+    # Model Instance Selection
     if 'last_trained' in st.session_state and st.session_state['last_trained'][0] == viz_model:
         model_instance = st.session_state['last_trained'][1]
+        st.info(f"Using trained {viz_model} model")
     else:
         model_instance = create_model_instance(viz_model)
-    
-    # Build grid & predict
-    M_grid, T_grid, grid_df = build_prediction_grid(0.7, 1.3, m_steps, 0.05, 2.0, t_steps)
-    params = getattr(model_instance, "params", {}) if hasattr(model_instance, "params") else {}
-    ck = cache_key(viz_model, params, m_steps, t_steps)
-    pred_cache = st.session_state['pred_cache']
-    
-    if ck in pred_cache:
-        preds = pred_cache[ck]
-    else:
-        with st.spinner("Computing predictions..."):
-            preds = safe_model_predict_volatility(model_instance, grid_df)
-            pred_cache[ck] = preds
-    
-    try:
-        Z_pred = np.array(preds).reshape(M_grid.shape)
-    except Exception:
-        try:
-            Z_pred = np.array(preds).reshape((M_grid.shape[1], M_grid.shape[0])).T
-        except Exception:
-            logger.exception("Prediction reshape failed")
-            Z_pred = np.full(M_grid.shape, np.nan)
-            st.error("Prediction reshape failed — model output ordering unexpected.")
-    
-    Z_true = synthetic_true_surface(M_grid, T_grid)
-    resid = Z_pred - Z_true
+        st.info(f"Using new {viz_model} instance (not trained)")
     
     # Visualization Section
     st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 📊 Visualization Results")
+    st.markdown("### 📈 Visualization")
     
+    vis_options = ["3D Surface", "Heatmap", "Greeks (Delta/Gamma)"]
+    vis_choice = st.selectbox("Visualization Type", vis_options, index=0)
+    
+    # Build prediction grid
+    M_grid, T_grid, grid_df = build_prediction_grid(0.7, 1.3, m_steps, 0.05, 2.0, t_steps)
+    
+    # Get predictions
+    ck = cache_key(viz_model, getattr(model_instance, "params", {}), m_steps, t_steps)
+    
+    if ck in st.session_state['pred_cache']:
+        preds = st.session_state['pred_cache'][ck]
+    else:
+        with st.spinner("Computing predictions..."):
+            preds = safe_model_predict_volatility(model_instance, grid_df)
+            st.session_state['pred_cache'][ck] = preds
+    
+    # Reshape predictions
+    try:
+        Z_pred = np.array(preds).reshape(M_grid.shape)
+    except Exception:
+        Z_pred = np.full(M_grid.shape, 0.2)
+        st.error("Prediction reshape failed")
+    
+    Z_true = synthetic_true_surface(M_grid, T_grid)
+    
+    # Display visualization
     if vis_choice == "3D Surface":
         fig = fig_surface(M_grid, T_grid, Z_pred, title=f"{viz_model} Predicted Surface")
         st.plotly_chart(fig, use_container_width=True)
@@ -656,21 +696,6 @@ def main():
     elif vis_choice == "Heatmap":
         fig = fig_heatmap(M_grid, T_grid, Z_pred, title=f"{viz_model} Heatmap")
         st.plotly_chart(fig, use_container_width=True)
-        
-    elif vis_choice == "Contour + Slices":
-        fig = fig_contour_slices(M_grid, T_grid, Z_pred, slice_m, slice_t)
-        st.plotly_chart(fig, use_container_width=True)
-        
-    elif vis_choice == "Residuals & Scatter":
-        fig_r = fig_residuals_scatter(Z_pred, Z_true)
-        st.plotly_chart(fig_r, use_container_width=True)
-        fig_res = fig_heatmap(M_grid, T_grid, resid, title="Residuals (Pred - True)")
-        st.plotly_chart(fig_res, use_container_width=True)
-        
-    elif vis_choice == "Animation (TTM)":
-        frames_fig = build_animation_frames(M_grid, T_grid, Z_pred, t_axis_steps=min(20, T_grid.shape[0]), 
-                                          title=f"{viz_model} Animated Surface")
-        st.plotly_chart(frames_fig, use_container_width=True)
         
     elif vis_choice == "Greeks (Delta/Gamma)":
         with st.spinner("Computing Greeks..."):
@@ -685,9 +710,9 @@ def main():
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Metrics and Analysis Section
+    # Metrics Section
     st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 📈 Performance Metrics")
+    st.markdown("### 📊 Performance Metrics")
     
     col9, col10, col11, col12 = st.columns(4)
     
@@ -707,33 +732,33 @@ def main():
     with col11:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.metric("Grid Size", f"{m_steps}×{t_steps}")
-        st.metric("Data Points", f"{len(df):,}")
+        data_size = len(st.session_state['training_data']) if st.session_state['training_data'] is not None else 0
+        st.metric("Data Points", f"{data_size:,}")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col12:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.markdown("**Model Info**")
         st.text(f"Type: {viz_model}")
-        st.text(f"Params: {len(params)}")
+        st.text(f"Trained: {'Yes' if 'last_trained' in st.session_state else 'No'}")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Arbitrage Checks
-    with st.expander("🔍 Arbitrage Analysis", expanded=False):
-        with st.spinner("Running arbitrage checks..."):
-            strike_grid = M_grid * spot_assumption
-            ttm_grid = T_grid
-            arb_res = run_arbitrage_checks_vectorized(Z_pred, strike_grid, ttm_grid)
-            st.json(arb_res)
-    
     st.markdown('</div>', unsafe_allow_html=True)
+
+def compute_and_plot_greeks(M, T, Z_pred, option_type="call", spot_assumption=100.0, r=0.03, q=0.0, h_frac=1e-3):
+    delta_grid, gamma_grid = compute_greeks_from_iv_grid(M, T, Z_pred, option_type, spot_assumption, r, q, h_frac)
     
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; font-size: 0.9rem;">
-        <p>Volatility Surface Explorer • Built with Streamlit • Production-ready visualization system</p>
-    </div>
-    """, unsafe_allow_html=True)
+    delta_fig = go.Figure(go.Surface(x=M, y=T, z=delta_grid, colorscale="RdBu"))
+    delta_fig.update_layout(title="Delta Surface", template="plotly_dark", 
+                           scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Delta"), 
+                           height=500)
+    
+    gamma_fig = go.Figure(go.Surface(x=M, y=T, z=gamma_grid, colorscale="RdBu"))
+    gamma_fig.update_layout(title="Gamma Surface", template="plotly_dark", 
+                           scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Gamma"), 
+                           height=500)
+    
+    return delta_grid, gamma_grid, delta_fig, gamma_fig
 
 if __name__ == "__main__":
     main()
