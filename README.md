@@ -21,6 +21,7 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
 
 ✅ **Monte Carlo Simulation**
 - Simulate option pricing under Geometric Brownian Motion (GBM)
+- Several different MC options with Numba-JIT integrated
 - Customizable drift, volatility, time steps, paths
 
 ✅ **Greeks Calculation**
@@ -206,6 +207,7 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
 
