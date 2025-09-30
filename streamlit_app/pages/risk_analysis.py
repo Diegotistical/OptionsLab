@@ -391,7 +391,7 @@ if risk_analysis_btn:
 # ======================
 
 if st.session_state.current_page == 'option_benchmark':
-    st.markdown('<div class="subsection-header">📈 Option Pricing Model Benchmark</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subsection-header"> Option Pricing Model Benchmark</div>', unsafe_allow_html=True)
     
     # Model selection
     st.markdown('<div class="engine-option">', unsafe_allow_html=True)
