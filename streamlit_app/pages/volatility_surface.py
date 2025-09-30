@@ -1,6 +1,5 @@
-# streamlit_vol_surface_prod_visual_greeks.py
 """
-Production-ready Volatility Surface Visual Explorer - Enhanced Import Debugging
+Production-ready Volatility Surface
 """
 
 import streamlit as st
@@ -18,19 +17,28 @@ import time
 import json
 import hashlib
 import math
+import os
 
 # =============================
-# CRITICAL: Enhanced Import System with Debugging
+# CRITICAL: Enhanced Import System for correct structure
 # =============================
 
 # Clear any existing paths to avoid conflicts
 original_sys_path = sys.path.copy()
-sys.path = [p for p in sys.path if "src" not in str(p)]
+
+# Get the root project directory (one level up from streamlit_app)
+ROOT_DIR = Path(__file__).parent.parent
+SRC_DIR = ROOT_DIR / "src"
+
+print(f"🔍 ROOT_DIR: {ROOT_DIR}")
+print(f"🔍 SRC_DIR: {SRC_DIR}")
+print(f"🔍 Current file: {Path(__file__)}")
 
 # Add paths in order of priority
 possible_paths = [
-    Path(__file__).parent / "src",  # Most reliable - relative to current file
-    Path.cwd() / "src",             # Current working directory
+    SRC_DIR,                           # Root project / src
+    ROOT_DIR,                          # Root project directory
+    Path(__file__).parent,             # streamlit_app directory
 ]
 
 added_paths = []
@@ -45,8 +53,34 @@ print("=== FINAL SYS.PATH ===")
 for i, path in enumerate(sys.path[:10]):  # Show first 10
     print(f"{i}: {path}")
 
+# Debug: Check what's actually in the directories
+print("\n=== CHECKING DIRECTORY STRUCTURE ===")
+print(f"Root exists: {ROOT_DIR.exists()}")
+print(f"Src exists: {SRC_DIR.exists()}")
+
+if SRC_DIR.exists():
+    print("📁 Contents of src:")
+    for item in SRC_DIR.iterdir():
+        if item.is_dir():
+            print(f"   📁 {item.name}/")
+        else:
+            print(f"   📄 {item.name}")
+
+volatility_surface_path = SRC_DIR / "volatility_surface"
+if volatility_surface_path.exists():
+    print(f"📁 Contents of volatility_surface:")
+    for item in volatility_surface_path.iterdir():
+        if item.is_dir():
+            print(f"   📁 {item.name}/")
+            if item.name == "models":
+                models_path = volatility_surface_path / "models"
+                for model_file in models_path.glob("*.py"):
+                    print(f"      📄 {model_file.name}")
+        else:
+            print(f"   📄 {item.name}")
+
 # =============================
-# DIRECT IMPORTS WITH MAXIMUM DEBUGGING
+# DIRECT IMPORTS FROM volatility_surface
 # =============================
 
 def attempt_import(module_path, class_name=None):
@@ -67,11 +101,11 @@ def attempt_import(module_path, class_name=None):
         print(f"   Traceback: {traceback.format_exc()}")
         return None
 
-# Import base first
+# Import base first - CORRECT PATH
+print("\n=== ATTEMPTING VOLATILITY SURFACE IMPORTS ===")
 VolatilityModelBase = attempt_import("volatility_surface.base", "VolatilityModelBase")
 
-# Import models with detailed debugging
-print("\n=== ATTEMPTING MODEL IMPORTS ===")
+# Import models with correct paths
 MLPModel = attempt_import("volatility_surface.models.mlp_model", "MLPModel")
 RandomForestVolatilityModel = attempt_import("volatility_surface.models.random_forest", "RandomForestVolatilityModel")  
 SVRModel = attempt_import("volatility_surface.models.svr_model", "SVRModel")
@@ -91,8 +125,15 @@ MODEL_CLASSES = {
 AVAILABLE_MODELS = [name for name, cls in MODEL_CLASSES.items() if cls is not None]
 
 if not AVAILABLE_MODELS:
-    st.error("🚨 CRITICAL: No real models could be imported!")
-    AVAILABLE_MODELS = ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"]
+    st.error("🚨 CRITICAL: No real models could be imported from volatility_surface!")
+    # Try alternative import strategy
+    try:
+        # Attempt to import the entire volatility_surface package
+        volatility_package = __import__("volatility_surface", fromlist=[''])
+        available_attrs = [attr for attr in dir(volatility_package) if not attr.startswith('_')]
+        st.write("Available in volatility_surface package:", available_attrs)
+    except Exception as e:
+        st.error(f"Couldn't inspect volatility_surface package: {e}")
 
 print(f"📊 Available models: {AVAILABLE_MODELS}")
 
@@ -217,6 +258,57 @@ def setup_dark_theme():
     """, unsafe_allow_html=True)
 
 # =============================
+# Utility Functions
+# =============================
+def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40):
+    m = np.linspace(m_start, m_end, m_steps)
+    t = np.linspace(t_start, t_end, t_steps)
+    M, T = np.meshgrid(m, t, indexing='xy')
+    flat_m = M.ravel()
+    flat_t = T.ravel()
+    grid_df = pd.DataFrame({
+        "moneyness": flat_m, "log_moneyness": np.log(np.clip(flat_m, 1e-12, None)),
+        "time_to_maturity": flat_t, "ttm_squared": flat_t ** 2,
+        "risk_free_rate": np.full(flat_m.shape, 0.03),
+        "historical_volatility": np.full(flat_m.shape, 0.2),
+        "volatility_skew": np.zeros(flat_m.shape)
+    })
+    return M, T, grid_df
+
+@st.cache_data
+def generate_fallback_data(n_samples: int = 1500, seed: int = 42) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    spots = rng.uniform(90, 110, n_samples)
+    strikes = rng.uniform(80, 120, n_samples)
+    ttms = rng.uniform(0.1, 2.0, n_samples)
+    moneyness = strikes / spots
+    ivs = 0.2 + 0.05 * np.sin(2 * np.pi * moneyness) * np.exp(-ttms) + 0.03 * (moneyness - 1)**2
+    ivs += rng.normal(0, 0.07, n_samples)
+    ivs = np.clip(ivs, 0.03, 0.6)
+    df = pd.DataFrame({
+        "underlying_price": spots, "strike_price": strikes, "time_to_maturity": ttms,
+        "risk_free_rate": rng.uniform(0.01, 0.05, n_samples),
+        "historical_volatility": rng.uniform(0.12, 0.28, n_samples),
+        "implied_volatility": ivs
+    })
+    df["moneyness"] = df["underlying_price"] / df["strike_price"]
+    df["log_moneyness"] = np.log(np.clip(df["moneyness"], 1e-12, None))
+    df["ttm_squared"] = df["time_to_maturity"] ** 2
+    df["volatility_skew"] = df["implied_volatility"] - df["historical_volatility"]
+    return df
+
+def fig_surface(M, T, Z, title="Volatility Surface"):
+    fig = go.Figure(go.Surface(x=M, y=T, z=Z, colorscale="Viridis"))
+    fig.update_layout(title=title, template="plotly_dark", height=600,
+                     scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Implied Vol"))
+    return fig
+
+def synthetic_true_surface(M, T):
+    base = 0.2 + 0.05 * np.sin(2 * np.pi * M) * np.exp(-T)
+    smile = 0.03 * (M - 1.0) ** 2
+    return np.clip(base + smile, 0.03, 0.6)
+
+# =============================
 # Main Application
 # =============================
 def main():
@@ -227,9 +319,45 @@ def main():
     st.markdown("""
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
         <h1 style="color: white; margin: 0;">📊 Volatility Surface Explorer</h1>
-        <p style="color: white; opacity: 0.9;">Enhanced Import Debugging Version</p>
+        <p style="color: white; opacity: 0.9;">Fixed for correct project structure</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Debug Information
+    with st.expander("🔧 Debug Information", expanded=True):
+        st.write("**Root Directory:**", ROOT_DIR)
+        st.write("**Src Directory:**", SRC_DIR)
+        st.write("**Current Working Directory:**", Path.cwd())
+        st.write("**Script Directory:**", Path(__file__).parent)
+        st.write("**Added Paths:**", added_paths)
+        
+        # Check directory structure
+        st.markdown("**📁 Directory Structure:**")
+        if ROOT_DIR.exists():
+            st.success(f"✅ Root directory found: {ROOT_DIR}")
+            if SRC_DIR.exists():
+                st.success(f"✅ src directory found: {SRC_DIR}")
+                volatility_surface_path = SRC_DIR / "volatility_surface"
+                if volatility_surface_path.exists():
+                    st.success(f"✅ volatility_surface found: {volatility_surface_path}")
+                    
+                    # List main volatility_surface files
+                    main_files = list(volatility_surface_path.glob("*.py"))
+                    st.write("**Main volatility_surface files:**", [f.name for f in main_files])
+                    
+                    # Check models directory
+                    models_path = volatility_surface_path / "models"
+                    if models_path.exists():
+                        model_files = list(models_path.glob("*.py"))
+                        st.write("**Model files:**", [f.name for f in model_files])
+                    else:
+                        st.error("❌ models directory not found in volatility_surface")
+                else:
+                    st.error(f"❌ volatility_surface not found in src")
+            else:
+                st.error(f"❌ src directory not found at: {SRC_DIR}")
+        else:
+            st.error(f"❌ Root directory not found at: {ROOT_DIR}")
     
     # Import Status Dashboard
     st.markdown("### 🔧 Import Status Dashboard")
@@ -365,57 +493,6 @@ def main():
     st.info(f"**Active Model:** {type(model_instance).__name__} | "
            f"**Trained:** {TrainingStateManager.is_model_trained(model_instance)} | "
            f"**Mode:** {'Fallback' if use_fallback else 'Real Model'}")
-
-# =============================
-# Utility Functions (keep your existing ones)
-# =============================
-def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40):
-    m = np.linspace(m_start, m_end, m_steps)
-    t = np.linspace(t_start, t_end, t_steps)
-    M, T = np.meshgrid(m, t, indexing='xy')
-    flat_m = M.ravel()
-    flat_t = T.ravel()
-    grid_df = pd.DataFrame({
-        "moneyness": flat_m, "log_moneyness": np.log(np.clip(flat_m, 1e-12, None)),
-        "time_to_maturity": flat_t, "ttm_squared": flat_t ** 2,
-        "risk_free_rate": np.full(flat_m.shape, 0.03),
-        "historical_volatility": np.full(flat_m.shape, 0.2),
-        "volatility_skew": np.zeros(flat_m.shape)
-    })
-    return M, T, grid_df
-
-@st.cache_data
-def generate_fallback_data(n_samples: int = 1500, seed: int = 42) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    spots = rng.uniform(90, 110, n_samples)
-    strikes = rng.uniform(80, 120, n_samples)
-    ttms = rng.uniform(0.1, 2.0, n_samples)
-    moneyness = strikes / spots
-    ivs = 0.2 + 0.05 * np.sin(2 * np.pi * moneyness) * np.exp(-ttms) + 0.03 * (moneyness - 1)**2
-    ivs += rng.normal(0, 0.07, n_samples)
-    ivs = np.clip(ivs, 0.03, 0.6)
-    df = pd.DataFrame({
-        "underlying_price": spots, "strike_price": strikes, "time_to_maturity": ttms,
-        "risk_free_rate": rng.uniform(0.01, 0.05, n_samples),
-        "historical_volatility": rng.uniform(0.12, 0.28, n_samples),
-        "implied_volatility": ivs
-    })
-    df["moneyness"] = df["underlying_price"] / df["strike_price"]
-    df["log_moneyness"] = np.log(np.clip(df["moneyness"], 1e-12, None))
-    df["ttm_squared"] = df["time_to_maturity"] ** 2
-    df["volatility_skew"] = df["implied_volatility"] - df["historical_volatility"]
-    return df
-
-def fig_surface(M, T, Z, title="Volatility Surface"):
-    fig = go.Figure(go.Surface(x=M, y=T, z=Z, colorscale="Viridis"))
-    fig.update_layout(title=title, template="plotly_dark", height=600,
-                     scene=dict(xaxis_title="Moneyness", yaxis_title="TTM", zaxis_title="Implied Vol"))
-    return fig
-
-def synthetic_true_surface(M, T):
-    base = 0.2 + 0.05 * np.sin(2 * np.pi * M) * np.exp(-T)
-    smile = 0.03 * (M - 1.0) ** 2
-    return np.clip(base + smile, 0.03, 0.6)
 
 # Initialize session state
 if 'pred_cache' not in st.session_state:
