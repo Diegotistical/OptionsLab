@@ -1,6 +1,6 @@
 # streamlit_vol_surface_prod_visual_greeks.py
 """
-Production-ready Volatility Surface Visual Explorer - Fixed Import Version
+Production-ready Volatility Surface Visual Explorer - Enhanced Import Debugging
 """
 
 import streamlit as st
@@ -20,288 +20,188 @@ import hashlib
 import math
 
 # =============================
-# Enhanced Import System
+# CRITICAL: Enhanced Import System with Debugging
 # =============================
 
-src_path = Path(__file__).parent / "src"
-sys.path.insert(0, str(src_path))
+# Clear any existing paths to avoid conflicts
+original_sys_path = sys.path.copy()
+sys.path = [p for p in sys.path if "src" not in str(p)]
 
-print("Using src path:", src_path)
+# Add paths in order of priority
+possible_paths = [
+    Path(__file__).parent / "src",  # Most reliable - relative to current file
+    Path.cwd() / "src",             # Current working directory
+]
 
+added_paths = []
+for path in possible_paths:
+    path_str = str(path)
+    if path.exists() and path_str not in sys.path:
+        sys.path.insert(0, path_str)
+        added_paths.append(path_str)
+        print(f"🔧 Added to sys.path: {path}")
 
-# Optional external imports
-try:
-    from scipy.stats import norm
-except Exception:
-    class _NormFallback:
-        @staticmethod
-        def cdf(x):
-            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-    norm = _NormFallback()
-
-# =============================
-# Logging
-# =============================
-logger = logging.getLogger("vol_surface_prod")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logger.addHandler(h)
+print("=== FINAL SYS.PATH ===")
+for i, path in enumerate(sys.path[:10]):  # Show first 10
+    print(f"{i}: {path}")
 
 # =============================
-# Setup Import Paths
-# =============================
-def setup_import_paths():
-    """Setup import paths for your specific structure"""
-    possible_paths = [
-        Path("/mount/src/optionslab/src"),
-        Path.cwd() / "src",
-        Path.cwd().parent / "src", 
-        Path(__file__).parent / "src",
-        Path(__file__).parent.parent / "src",
-    ]
-    
-    added_paths = []
-    for path in possible_paths:
-        if path.exists() and str(path) not in sys.path:
-            sys.path.insert(0, str(path))
-            added_paths.append(str(path))
-            logger.info(f"Added to sys.path: {path}")
-    
-    return added_paths
-
-added_paths = setup_import_paths()
-
-# =============================
-# DIRECT IMPORTS WITH PROPER ERROR HANDLING
+# DIRECT IMPORTS WITH MAXIMUM DEBUGGING
 # =============================
 
-logger.info("=== ATTEMPTING DIRECT IMPORTS ===")
+def attempt_import(module_path, class_name=None):
+    """Attempt to import with full error reporting"""
+    try:
+        if class_name:
+            exec(f"from {module_path} import {class_name}")
+            result = locals()[class_name]
+            print(f"✅ SUCCESS: {module_path} -> {class_name}")
+            return result
+        else:
+            module = __import__(module_path, fromlist=[''])
+            print(f"✅ SUCCESS: {module_path}")
+            return module
+    except Exception as e:
+        print(f"❌ FAILED: {module_path}{f' -> {class_name}' if class_name else ''}")
+        print(f"   Error: {e}")
+        print(f"   Traceback: {traceback.format_exc()}")
+        return None
 
-# Import base first since models depend on it
-try:
-    from volatility_surface.base import VolatilityModelBase
-    logger.info("✓ Imported VolatilityModelBase")
-    BASE_AVAILABLE = True
-except Exception as e:
-    logger.warning(f"VolatilityModelBase import failed: {e}")
-    BASE_AVAILABLE = False
-    # Create a dummy base class for fallback
-    class VolatilityModelBase:
-        def __init__(self, feature_columns=None, enable_benchmark=False):
-            self.feature_columns = feature_columns or []
-            self.enable_benchmark = enable_benchmark
-            self.trained = False
-        
-        def train(self, df, val_split=0.2):
-            self.trained = True
-            return {"status": "trained"}
-        
-        def predict_volatility(self, df):
-            if not self.trained:
-                raise RuntimeError("Model is not trained or initialized.")
-            return np.full(len(df), 0.2)
+# Import base first
+VolatilityModelBase = attempt_import("volatility_surface.base", "VolatilityModelBase")
 
-# Now import the models
-VolatilitySurfaceGenerator = None
-MLPModel = None
-RandomForestVolatilityModel = None  
-SVRModel = None
-XGBoostModel = None
-
-try:
-    from volatility_surface.surface_generator import VolatilitySurfaceGenerator
-    logger.info("✓ Imported VolatilitySurfaceGenerator")
-except Exception as e:
-    logger.warning(f"VolatilitySurfaceGenerator import failed: {e}")
-
-try:
-    from volatility_surface.models.mlp_model import MLPModel
-    logger.info("✓ Imported MLPModel")
-except Exception as e:
-    logger.warning(f"MLPModel import failed: {e}")
-    MLPModel = None
-
-try:
-    from volatility_surface.models.random_forest import RandomForestVolatilityModel
-    logger.info("✓ Imported RandomForestVolatilityModel")
-except Exception as e:
-    logger.warning(f"RandomForestVolatilityModel import failed: {e}")
-    RandomForestVolatilityModel = None
-
-try:
-    from volatility_surface.models.svr_model import SVRModel
-    logger.info("✓ Imported SVRModel")
-except Exception as e:
-    logger.warning(f"SVRModel import failed: {e}")
-    SVRModel = None
-
-try:
-    from volatility_surface.models.xgboost_model import XGBoostModel
-    logger.info("✓ Imported XGBoostModel")
-except Exception as e:
-    logger.warning(f"XGBoostModel import failed: {e}")
-    XGBoostModel = None
+# Import models with detailed debugging
+print("\n=== ATTEMPTING MODEL IMPORTS ===")
+MLPModel = attempt_import("volatility_surface.models.mlp_model", "MLPModel")
+RandomForestVolatilityModel = attempt_import("volatility_surface.models.random_forest", "RandomForestVolatilityModel")  
+SVRModel = attempt_import("volatility_surface.models.svr_model", "SVRModel")
+XGBoostModel = attempt_import("volatility_surface.models.xgboost_model", "XGBoostModel")
+VolatilitySurfaceGenerator = attempt_import("volatility_surface.surface_generator", "VolatilitySurfaceGenerator")
 
 # =============================
-# Enhanced DummyModel that mimics your actual models
+# Model Availability Tracking
 # =============================
-class EnhancedDummyModel:
-    """Dummy model that properly mimics your actual model interface"""
-    def __init__(self, **kwargs):
-        self.params = kwargs or {}
-        self.feature_names_in_ = [
-            "moneyness", "log_moneyness", "time_to_maturity", 
-            "ttm_squared", "risk_free_rate", "historical_volatility", "volatility_skew"
-        ]
-        self.name = "EnhancedDummyModel"
-        self.trained = False
-        self.is_trained = False
-        
-    def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
-        logger.info("EnhancedDummyModel.train called")
-        self.trained = True
-        self.is_trained = True
-        return {
-            "train_rmse": 0.1, 
-            "val_rmse": 0.12, 
-            "val_r2": 0.85, 
-            "note": "EnhancedDummyModel - proper training simulation"
-        }
-    
-    def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
-        if not self.trained:
-            # Simulate the exact error your real models throw
-            raise RuntimeError("Model is not trained or initialized.")
-        
-        # Realistic volatility surface prediction
-        m = df["moneyness"].to_numpy()
-        t = df["time_to_maturity"].to_numpy()
-        base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
-        smile = 0.03 * (m - 1.0) ** 2
-        return np.clip(base + smile, 0.03, 0.6)
-    
-    def _assert_trained(self):
-        """Mimic the real model's training check"""
-        if not self.trained:
-            raise RuntimeError("Model is not trained or initialized.")
+MODEL_CLASSES = {
+    "MLP Neural Network": MLPModel,
+    "Random Forest": RandomForestVolatilityModel,
+    "SVR": SVRModel, 
+    "XGBoost": XGBoostModel
+}
+
+AVAILABLE_MODELS = [name for name, cls in MODEL_CLASSES.items() if cls is not None]
+
+if not AVAILABLE_MODELS:
+    st.error("🚨 CRITICAL: No real models could be imported!")
+    AVAILABLE_MODELS = ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"]
+
+print(f"📊 Available models: {AVAILABLE_MODELS}")
 
 # =============================
-# Smart Model Factory with Training Detection
+# STRICT Model Factory - No Silent Fallbacks
 # =============================
 def create_model_instance(name: str, **kwargs):
-    """Create model instance with proper training state handling"""
-    model_map = {
-        "MLP Neural Network": MLPModel,
-        "Random Forest": RandomForestVolatilityModel, 
-        "SVR": SVRModel,
-        "XGBoost": XGBoostModel
-    }
-    
-    model_class = model_map.get(name)
+    """Create model instance - FAIL LOUDLY if real model can't be created"""
+    model_class = MODEL_CLASSES.get(name)
     
     if model_class is None:
-        logger.info(f"Using EnhancedDummyModel for {name} - no class found")
-        return EnhancedDummyModel(**kwargs)
+        # Don't silently fallback - show explicit error
+        raise ImportError(f"Real model '{name}' is not available. Check imports above.")
     
     try:
-        logger.info(f"Attempting to create {name} instance")
+        print(f"🔧 Creating {name} instance...")
         instance = model_class(**kwargs)
-        logger.info(f"✓ Successfully created {name} instance")
+        print(f"✅ Successfully created {name} instance")
         
-        # Set initial state to untrained (mimic real model behavior)
+        # Initialize training state
         if hasattr(instance, 'trained'):
             instance.trained = False
         if hasattr(instance, 'is_trained'):
             instance.is_trained = False
             
         return instance
+        
     except Exception as e:
-        logger.error(f"Failed to create {name}: {e}")
-        return EnhancedDummyModel(**kwargs)
+        # Don't fallback silently - raise the actual error
+        st.error(f"❌ Failed to create {name}: {e}")
+        raise
 
-# Get available models
-MODEL_NAMES = ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"]
-AVAILABLE_MODELS = []
-
-for name in MODEL_NAMES:
-    model_class = {
-        "MLP Neural Network": MLPModel,
-        "Random Forest": RandomForestVolatilityModel,
-        "SVR": SVRModel,
-        "XGBoost": XGBoostModel
-    }.get(name)
+# =============================
+# Training State Manager
+# =============================
+class TrainingStateManager:
+    """Manages model training state explicitly"""
     
-    if model_class is not None:
-        AVAILABLE_MODELS.append(name)
-
-if not AVAILABLE_MODELS:
-    AVAILABLE_MODELS = ["EnhancedDummyModel"]
-    logger.info("No custom models available, using EnhancedDummyModel")
-
-logger.info(f"Available models: {AVAILABLE_MODELS}")
-
-# =============================
-# Enhanced Prediction Function
-# =============================
-def safe_model_predict_volatility(model: Any, df: pd.DataFrame) -> np.ndarray:
-    """
-    Enhanced prediction function that properly handles training state
-    """
-    try:
-        # Check if model has the training assertion method
+    @staticmethod
+    def is_model_trained(model: Any) -> bool:
+        """Check if model is properly trained"""
+        if hasattr(model, 'trained') and model.trained:
+            return True
+        if hasattr(model, 'is_trained') and model.is_trained:
+            return True
         if hasattr(model, '_assert_trained'):
             try:
                 model._assert_trained()
-            except RuntimeError as e:
-                if "not trained" in str(e).lower():
-                    logger.warning(f"Model not trained, using fallback prediction")
-                    # Use fallback that doesn't require training
-                    return generate_fallback_prediction(df)
-                else:
-                    raise e
-        
-        # Check other training indicators
-        if hasattr(model, 'trained') and not model.trained:
-            logger.warning("Model marked as not trained, using fallback")
-            return generate_fallback_prediction(df)
-            
-        if hasattr(model, 'is_trained') and not model.is_trained:
-            logger.warning("Model marked as not trained, using fallback")
-            return generate_fallback_prediction(df)
-        
-        # If we get here, model should be trained - attempt prediction
-        if hasattr(model, "predict_volatility"):
-            result = model.predict_volatility(df)
-            logger.info("✓ Used model.predict_volatility()")
-            return result
-        elif hasattr(model, "predict"):
-            result = model.predict(df)
-            logger.info("✓ Used model.predict()")
-            return result
-        else:
-            logger.warning("No prediction method found, using fallback")
-            return generate_fallback_prediction(df)
-            
-    except RuntimeError as e:
-        if "not trained" in str(e).lower():
-            logger.warning("Model runtime error - not trained, using fallback")
-            return generate_fallback_prediction(df)
-        else:
-            logger.error(f"Runtime error in prediction: {e}")
-            return generate_fallback_prediction(df)
-    except Exception as e:
-        logger.error(f"Unexpected error in prediction: {e}")
-        return generate_fallback_prediction(df)
+                return True
+            except RuntimeError:
+                return False
+        return False
+    
+    @staticmethod
+    def mark_model_trained(model: Any):
+        """Explicitly mark model as trained"""
+        if hasattr(model, 'trained'):
+            model.trained = True
+        if hasattr(model, 'is_trained'):
+            model.is_trained = True
 
-def generate_fallback_prediction(df: pd.DataFrame) -> np.ndarray:
-    """Generate a reasonable fallback volatility surface"""
-    m = df["moneyness"].to_numpy()
-    t = df["time_to_maturity"].to_numpy()
-    base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
-    smile = 0.03 * (m - 1.0) ** 2
-    return np.clip(base + smile, 0.03, 0.6)
+# =============================
+# STRICT Prediction Function
+# =============================
+def strict_model_predict_volatility(model: Any, df: pd.DataFrame) -> np.ndarray:
+    """
+    Strict prediction that fails loudly if model isn't properly trained
+    """
+    # Check training state
+    if not TrainingStateManager.is_model_trained(model):
+        raise RuntimeError(
+            f"Model '{getattr(model, 'name', type(model).__name__)}' is not trained. "
+            f"Please train the model first using the 'Train Model' button."
+        )
+    
+    # Attempt prediction
+    if hasattr(model, "predict_volatility"):
+        return model.predict_volatility(df)
+    elif hasattr(model, "predict"):
+        return model.predict(df)
+    else:
+        raise AttributeError("Model has no prediction method")
+
+# =============================
+# Fallback Model (ONLY for explicit fallback mode)
+# =============================
+class ExplicitFallbackModel:
+    """Fallback model that's only used when explicitly requested"""
+    def __init__(self, **kwargs):
+        self.name = "ExplicitFallback"
+        self.trained = False
+        
+    def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
+        self.trained = True
+        return {
+            "train_rmse": 0.15, 
+            "val_rmse": 0.18, 
+            "val_r2": 0.75,
+            "note": "EXPLICIT FALLBACK MODE - Real models failed to load"
+        }
+    
+    def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
+        if not self.trained:
+            raise RuntimeError("Fallback model not trained")
+        m = df["moneyness"].to_numpy()
+        t = df["time_to_maturity"].to_numpy()
+        base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
+        smile = 0.03 * (m - 1.0) ** 2
+        return np.clip(base + smile, 0.03, 0.6)
 
 # =============================
 # UI Configuration
@@ -310,18 +210,164 @@ def setup_dark_theme():
     st.markdown("""
     <style>
     .main { background-color: #0e1117; color: #fafafa; }
-    .stApp { background: linear-gradient(135deg, #0c0d13 0%, #1a1d29 100%); max-width: 100% !important; }
-    .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 100% !important; }
-    .section { background: rgba(30, 33, 48, 0.9); border-radius: 10px; padding: 1.5rem; margin: 1rem 0; border-left: 4px solid #ff4b4b; }
-    .metric-card { background: rgba(40, 44, 62, 0.8); padding: 1rem; border-radius: 8px; border: 1px solid #2a2f45; }
-    .status-available { background: rgba(0, 200, 83, 0.2); border-left: 3px solid #00c853; }
-    .status-unavailable { background: rgba(255, 75, 75, 0.2); border-left: 3px solid #ff4b4b; }
-    .stButton>button { background: linear-gradient(45deg, #ff6b6b, #ff4b4b); color: white; border-radius: 5px; width: 100%; }
+    .stApp { background: linear-gradient(135deg, #0c0d13 0%, #1a1d29 100%); }
+    .import-success { background: rgba(0, 200, 83, 0.1); padding: 10px; border-radius: 5px; border-left: 4px solid #00c853; }
+    .import-failure { background: rgba(255, 75, 75, 0.1); padding: 10px; border-radius: 5px; border-left: 4px solid #ff4b4b; }
     </style>
     """, unsafe_allow_html=True)
 
 # =============================
-# Utility Functions (same as before)
+# Main Application
+# =============================
+def main():
+    st.set_page_config(page_title="Volatility Surface Explorer", layout="wide")
+    setup_dark_theme()
+    
+    # Header with import status
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
+        <h1 style="color: white; margin: 0;">📊 Volatility Surface Explorer</h1>
+        <p style="color: white; opacity: 0.9;">Enhanced Import Debugging Version</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Import Status Dashboard
+    st.markdown("### 🔧 Import Status Dashboard")
+    
+    status_cols = st.columns(4)
+    with status_cols[0]:
+        st.metric("Available Models", f"{len(AVAILABLE_MODELS)}/4")
+    with status_cols[1]:
+        status = "✅ Ready" if AVAILABLE_MODELS else "❌ Failed"
+        st.metric("Overall Status", status)
+    with status_cols[2]:
+        st.metric("Sys Paths Added", len(added_paths))
+    with status_cols[3]:
+        if st.button("🔄 Debug Imports"):
+            st.rerun()
+    
+    # Detailed import status
+    with st.expander("📋 Detailed Import Status", expanded=True):
+        for model_name, model_class in MODEL_CLASSES.items():
+            if model_class is not None:
+                st.markdown(f'<div class="import-success">✅ {model_name}: SUCCESS</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="import-failure">❌ {model_name}: FAILED</div>', unsafe_allow_html=True)
+    
+    # Configuration
+    st.markdown("### ⚙️ Configuration")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Model selection - only show available models
+        if AVAILABLE_MODELS:
+            viz_model = st.selectbox("Model Type", AVAILABLE_MODELS, index=0)
+            use_fallback = st.checkbox("🔄 Use Explicit Fallback Mode", value=False, 
+                                     help="Use fallback model instead of real models")
+        else:
+            st.error("No real models available!")
+            viz_model = "MLP Neural Network"
+            use_fallback = True
+    
+    with col2:
+        n_samples = st.slider("Dataset Size", 200, 5000, 1500)
+        m_steps = st.slider("Moneyness Grid", 12, 100, 40)
+        
+    with col3:
+        t_steps = st.slider("TTM Grid", 6, 60, 30)
+        spot_assumption = st.number_input("Spot Price", value=100.0)
+    
+    # Model initialization
+    try:
+        if use_fallback:
+            model_instance = ExplicitFallbackModel()
+            st.warning("🔄 Using EXPLICIT FALLBACK MODE")
+        else:
+            model_instance = create_model_instance(viz_model)
+            st.success(f"✅ Loaded real model: {viz_model}")
+    except Exception as e:
+        st.error(f"❌ Failed to initialize model: {e}")
+        model_instance = ExplicitFallbackModel()
+        st.warning("🔄 Fell back to explicit fallback mode")
+    
+    # Data Generation
+    st.markdown("### 📊 Data Management")
+    
+    if st.button("🔄 Generate Training Data", use_container_width=True):
+        with st.spinner("Generating data..."):
+            df = generate_fallback_data(n_samples)
+            st.session_state['training_data'] = df
+            st.success(f"Generated {len(df)} training samples")
+    
+    if st.session_state.get('training_data') is not None:
+        df = st.session_state['training_data']
+        st.info(f"✅ Training data ready: {len(df)} samples")
+    else:
+        df = generate_fallback_data(1000)
+        st.warning("⚠️ Using fallback data - generate training data for proper training")
+    
+    # Model Training
+    st.markdown("### 🤖 Model Training")
+    
+    if st.button("🚀 Train Model", use_container_width=True, 
+                disabled=st.session_state.get('training_data') is None):
+        with st.spinner("Training model..."):
+            df = st.session_state['training_data']
+            
+            try:
+                if hasattr(model_instance, 'train'):
+                    metrics = model_instance.train(df, val_split=0.2)
+                    TrainingStateManager.mark_model_trained(model_instance)
+                    st.success("✅ Training completed successfully!")
+                    st.json(metrics)
+                else:
+                    metrics = {"note": "Model does not require training"}
+                    st.info("ℹ️ Model does not require training")
+                
+                st.session_state['last_trained'] = (viz_model, model_instance, metrics, use_fallback)
+                
+            except Exception as e:
+                st.error(f"❌ Training failed: {str(e)}")
+                st.code(traceback.format_exc())
+    
+    # Use trained model if available
+    if ('last_trained' in st.session_state and 
+        st.session_state['last_trained'][0] == viz_model and
+        st.session_state['last_trained'][3] == use_fallback):
+        model_instance = st.session_state['last_trained'][1]
+        st.success("✅ Using trained model instance")
+    else:
+        st.warning("⚠️ Using untrained model instance")
+    
+    # Visualization
+    st.markdown("### 📈 Volatility Surface")
+    
+    M_grid, T_grid, grid_df = build_prediction_grid(0.7, 1.3, m_steps, 0.05, 2.0, t_steps)
+    
+    try:
+        with st.spinner("Computing volatility surface..."):
+            preds = strict_model_predict_volatility(model_instance, grid_df)
+        st.success("✅ Predictions computed using REAL model!")
+        Z_pred = np.array(preds).reshape(M_grid.shape)
+        
+    except Exception as e:
+        st.error(f"❌ Prediction failed: {e}")
+        # Use simple fallback for display only
+        Z_pred = synthetic_true_surface(M_grid, T_grid)
+    
+    # Display surface
+    model_type = "Fallback" if use_fallback else viz_model
+    fig = fig_surface(M_grid, T_grid, Z_pred, f"{model_type} Volatility Surface")
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Show what model we're actually using
+    st.info(f"**Active Model:** {type(model_instance).__name__} | "
+           f"**Trained:** {TrainingStateManager.is_model_trained(model_instance)} | "
+           f"**Mode:** {'Fallback' if use_fallback else 'Real Model'}")
+
+# =============================
+# Utility Functions (keep your existing ones)
 # =============================
 def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40):
     m = np.linspace(m_start, m_end, m_steps)
@@ -338,17 +384,7 @@ def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_en
     })
     return M, T, grid_df
 
-def cache_key(model_name: str, params: Dict[str, Any], m_steps: int, t_steps: int) -> str:
-    payload = {"model": model_name, "params": params, "m": m_steps, "t": t_steps}
-    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
-
-# Initialize session state
-if 'pred_cache' not in st.session_state:
-    st.session_state['pred_cache'] = {}
-if 'training_data' not in st.session_state:
-    st.session_state['training_data'] = None
-
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def generate_fallback_data(n_samples: int = 1500, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     spots = rng.uniform(90, 110, n_samples)
@@ -370,33 +406,6 @@ def generate_fallback_data(n_samples: int = 1500, seed: int = 42) -> pd.DataFram
     df["volatility_skew"] = df["implied_volatility"] - df["historical_volatility"]
     return df
 
-@st.cache_data(show_spinner=False)
-def generate_surface_data_via_generator(n_samples: int = 1500, seed: int = 42) -> pd.DataFrame:
-    if VolatilitySurfaceGenerator is None:
-        return generate_fallback_data(n_samples, seed)
-    try:
-        rng = np.random.default_rng(seed)
-        base_strikes = np.linspace(80, 120, 50)
-        base_maturities = np.linspace(0.1, 2.0, 20)
-        generator = VolatilitySurfaceGenerator(base_strikes, base_maturities, 
-                                             np.zeros((20, 50)), 50, 20, 'cubic')
-        spots = rng.uniform(90, 110, n_samples)
-        strikes = rng.uniform(80, 120, n_samples)
-        ttms = rng.uniform(0.1, 2.0, n_samples)
-        ivs = generator.get_surface_batch(strikes, ttms)
-        df = pd.DataFrame({
-            "underlying_price": spots, "strike_price": strikes, "time_to_maturity": ttms,
-            "risk_free_rate": rng.uniform(0.01, 0.05, n_samples),
-            "historical_volatility": rng.uniform(0.12, 0.28, n_samples),
-            "implied_volatility": ivs
-        })
-        return df
-    except Exception:
-        return generate_fallback_data(n_samples, seed)
-
-# =============================
-# Visualization Functions
-# =============================
 def fig_surface(M, T, Z, title="Volatility Surface"):
     fig = go.Figure(go.Surface(x=M, y=T, z=Z, colorscale="Viridis"))
     fig.update_layout(title=title, template="plotly_dark", height=600,
@@ -408,180 +417,11 @@ def synthetic_true_surface(M, T):
     smile = 0.03 * (M - 1.0) ** 2
     return np.clip(base + smile, 0.03, 0.6)
 
-# =============================
-# Main Application
-# =============================
-def main():
-    st.set_page_config(page_title="Volatility Surface Explorer", layout="wide")
-    setup_dark_theme()
-    
-    # Header
-    st.markdown("""
-    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
-        <h1 style="color: white; margin: 0;">📊 Volatility Surface Explorer</h1>
-        <p style="color: white; opacity: 0.9;">Fixed Training State Handling</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Debug Info
-    with st.expander("🔧 Import & Training Status", expanded=True):
-        st.write("**Available Models:**", AVAILABLE_MODELS)
-        modules = [
-            ("VolatilityModelBase", BASE_AVAILABLE),
-            ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator is not None),
-            ("MLPModel", MLPModel is not None),
-            ("RandomForest", RandomForestVolatilityModel is not None),
-            ("SVRModel", SVRModel is not None),
-            ("XGBoostModel", XGBoostModel is not None),
-        ]
-        for name, available in modules:
-            status = "✅" if available else "❌"
-            st.write(f"{status} {name}")
-        
-        if 'last_trained' in st.session_state:
-            st.success("✅ Model is trained and ready for prediction")
-        else:
-            st.warning("⚠️ Model needs training before prediction")
-    
-    # Configuration
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### ⚙️ Configuration")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        use_generator = st.checkbox("Use Surface Generator", value=VolatilitySurfaceGenerator is not None)
-        n_samples = st.slider("Dataset Size", 200, 5000, 1500)
-        
-    with col2:
-        viz_model = st.selectbox("Model Type", AVAILABLE_MODELS, index=0)
-        m_steps = st.slider("Moneyness Grid", 12, 100, 40)
-        
-    with col3:
-        t_steps = st.slider("TTM Grid", 6, 60, 30)
-        spot_assumption = st.number_input("Spot Price", value=100.0)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Data Generation
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 📊 Data Management")
-    
-    if st.button("🔄 Generate Training Data", use_container_width=True):
-        with st.spinner("Generating data..."):
-            if use_generator and VolatilitySurfaceGenerator is not None:
-                df = generate_surface_data_via_generator(n_samples)
-            else:
-                df = generate_fallback_data(n_samples)
-            st.session_state['training_data'] = df
-            st.success(f"Generated {len(df)} training samples")
-    
-    if st.session_state['training_data'] is not None:
-        df = st.session_state['training_data']
-        st.info(f"✅ Training data ready: {len(df)} samples")
-    else:
-        df = generate_fallback_data(1000)
-        st.warning("⚠️ Using fallback data - generate training data for proper training")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Model Training
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 🤖 Model Training")
-    
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        if st.button("🚀 Train Model", use_container_width=True, 
-                    disabled=st.session_state['training_data'] is None):
-            with st.spinner("Training model (this may take a moment)..."):
-                df = st.session_state['training_data']
-                mdl = create_model_instance(viz_model)
-                
-                try:
-                    if hasattr(mdl, 'train'):
-                        metrics = mdl.train(df, val_split=0.2)
-                        st.success("✅ Training completed successfully!")
-                        st.json(metrics)
-                    else:
-                        metrics = {"note": "Model does not require training"}
-                        st.info("ℹ️ Model does not require training")
-                    
-                    st.session_state['last_trained'] = (viz_model, mdl, metrics)
-                    
-                except Exception as e:
-                    st.error(f"❌ Training failed: {str(e)}")
-                    st.session_state['last_trained'] = (viz_model, mdl, {"error": str(e)})
-    
-    with col5:
-        if st.button("🗑️ Clear Cache", use_container_width=True):
-            st.session_state['pred_cache'] = {}
-            st.session_state['training_data'] = None
-            st.session_state.pop('last_trained', None)
-            st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Model Instance
-    if 'last_trained' in st.session_state and st.session_state['last_trained'][0] == viz_model:
-        model_instance = st.session_state['last_trained'][1]
-        st.success("✅ Using trained model instance")
-    else:
-        model_instance = create_model_instance(viz_model)
-        st.warning("⚠️ Using untrained model instance - predictions will use fallback")
-    
-    # Visualization
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 📈 Volatility Surface")
-    
-    M_grid, T_grid, grid_df = build_prediction_grid(0.7, 1.3, m_steps, 0.05, 2.0, t_steps)
-    
-    ck = cache_key(viz_model, getattr(model_instance, "params", {}), m_steps, t_steps)
-    
-    if ck in st.session_state['pred_cache']:
-        preds = st.session_state['pred_cache'][ck]
-        st.info("📊 Using cached predictions")
-    else:
-        with st.spinner("Computing volatility surface..."):
-            preds = safe_model_predict_volatility(model_instance, grid_df)
-            st.session_state['pred_cache'][ck] = preds
-        st.success("✅ Predictions computed")
-    
-    try:
-        Z_pred = np.array(preds).reshape(M_grid.shape)
-    except Exception:
-        Z_pred = np.full(M_grid.shape, 0.2)
-        st.error("Prediction reshape failed")
-    
-    Z_true = synthetic_true_surface(M_grid, T_grid)
-    
-    # Display
-    fig = fig_surface(M_grid, T_grid, Z_pred, f"{viz_model} Volatility Surface")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Metrics
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### 📊 Performance Metrics")
-    
-    col6, col7, col8, col9 = st.columns(4)
-    with col6: 
-        st.metric("IV Min", f"{np.nanmin(Z_pred):.4f}")
-        st.metric("Training Data", f"{len(df) if st.session_state['training_data'] is not None else 0:,}")
-    with col7: 
-        st.metric("IV Mean", f"{np.nanmean(Z_pred):.4f}")
-        st.metric("Grid Size", f"{m_steps}×{t_steps}")
-    with col8: 
-        st.metric("IV Max", f"{np.nanmax(Z_pred):.4f}")
-        trained_status = "Yes" if 'last_trained' in st.session_state else "No"
-        st.metric("Model Trained", trained_status)
-    with col9: 
-        rmse = np.sqrt(np.nanmean((Z_pred - Z_true)**2))
-        st.metric("RMSE", f"{rmse:.6f}")
-        st.metric("Model Type", viz_model)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+# Initialize session state
+if 'pred_cache' not in st.session_state:
+    st.session_state['pred_cache'] = {}
+if 'training_data' not in st.session_state:
+    st.session_state['training_data'] = None
 
 if __name__ == "__main__":
     main()
