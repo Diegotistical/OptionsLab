@@ -1,48 +1,182 @@
-
-import os
+import streamlit as st
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import logging
+import traceback
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import time
+import json
+import hashlib
+import math
 
 # =============================
 # Enhanced Import System
 # =============================
 
-# Get project root (two levels up from this file)
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_PATH = PROJECT_ROOT / "src"
+# Add the src directory to the Python path
+src_path = Path(__file__).parent / "src"
+sys.path.insert(0, str(src_path))
 
-if SRC_PATH.exists():
-    sys.path.insert(0, str(SRC_PATH))
-    print(f"Added to sys.path: {SRC_PATH}")
-else:
-    print(f"WARNING: SRC_PATH not found -> {SRC_PATH}")
+# Also add the current directory to handle direct imports
+current_dir = Path(__file__).parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+
+print("Using src path:", src_path)
+print("Using current dir:", current_dir)
+
+# Optional external imports
+try:
+    from scipy.stats import norm
+except Exception:
+    class _NormFallback:
+        @staticmethod
+        def cdf(x):
+            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+    norm = _NormFallback()
 
 # =============================
-# Third-party imports
+# Logging
 # =============================
-import streamlit as st
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
-import hashlib
-import json
-import logging
-from typing import Any, Dict, Optional
+logger = logging.getLogger("vol_surface_prod")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    h = logging.StreamHandler(sys.stdout)
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(h)
 
 # =============================
-# Your package imports
+# Setup Import Paths
 # =============================
-from volatility_surface.base import VolatilityModelBase
-from volatility_surface.surface_generator import VolatilitySurfaceGenerator
-from volatility_surface.models.mlp_model import MLPModel
-from volatility_surface.models.random_forest import RandomForestVolatilityModel
-from volatility_surface.models.svr_model import SVRModel
-from volatility_surface.models.xgboost_model import XGBoostModel
+def setup_import_paths():
+    """Setup import paths for your specific structure"""
+    possible_paths = [
+        Path("/mount/src/optionslab/src"),  # Streamlit Cloud path
+        Path.cwd() / "src",                # Local development
+        Path.cwd().parent / "src", 
+        Path(__file__).parent / "src",
+        Path(__file__).parent.parent / "src",
+        Path(__file__).parent,             # Direct access to streamlit_app
+    ]
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+    added_paths = []
+    for path in possible_paths:
+        if path.exists() and str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+            added_paths.append(str(path))
+            logger.info(f"Added to sys.path: {path}")
+
+    return added_paths
+
+added_paths = setup_import_paths()
+
+# =============================
+# DIRECT IMPORTS WITH PROPER ERROR HANDLING
+# =============================
+
+logger.info("=== ATTEMPTING DIRECT IMPORTS ===")
+
+# Import base first since models depend on it
+VolatilityModelBase = None
+try:
+    # Try multiple import paths
+    import_attempts = [
+        lambda: __import__('volatility_surface.base', fromlist=['VolatilityModelBase']),
+        lambda: __import__('src.volatility_surface.base', fromlist=['VolatilityModelBase']),
+        lambda: __import__('base', fromlist=['VolatilityModelBase'])
+    ]
+    
+    for attempt in import_attempts:
+        try:
+            base_module = attempt()
+            VolatilityModelBase = getattr(base_module, 'VolatilityModelBase')
+            logger.info("✓ Imported VolatilityModelBase")
+            BASE_AVAILABLE = True
+            break
+        except Exception as e:
+            logger.warning(f"Import attempt failed: {e}")
+            continue
+    
+    if VolatilityModelBase is None:
+        raise ImportError("Could not import VolatilityModelBase from any path")
+        
+except Exception as e:
+    logger.warning(f"VolatilityModelBase import failed: {e}")
+    BASE_AVAILABLE = False
+    # Create a dummy base class for fallback
+    class VolatilityModelBase:
+        def __init__(self, feature_columns=None, enable_benchmark=False):
+            self.feature_columns = feature_columns or []
+            self.enable_benchmark = enable_benchmark
+            self.trained = False
+
+        def train(self, df, val_split=0.2):
+            self.trained = True
+            return {"status": "trained"}
+
+        def predict_volatility(self, df):
+            if not self.trained:
+                raise RuntimeError("Model is not trained or initialized.")
+            return np.full(len(df), 0.2)
+
+# Now import the models with multiple path attempts
+VolatilitySurfaceGenerator = None
+MLPModel = None
+RandomForestVolatilityModel = None  
+SVRModel = None
+XGBoostModel = None
+
+def try_import_model(module_path, class_name):
+    """Helper function to try importing models from multiple paths"""
+    import_attempts = [
+        lambda: __import__(module_path, fromlist=[class_name]),
+        lambda: __import__(f"src.{module_path}", fromlist=[class_name]),
+        lambda: __import__(f"volatility_surface.models.{class_name.lower().replace('model', '')}", fromlist=[class_name]),
+    ]
+    
+    for attempt in import_attempts:
+        try:
+            module = attempt()
+            model_class = getattr(module, class_name)
+            logger.info(f"✓ Imported {class_name}")
+            return model_class
+        except Exception as e:
+            logger.debug(f"Failed to import {class_name} from attempt: {e}")
+            continue
+    return None
+
+# Import models
+MLPModel = try_import_model('volatility_surface.models.mlp_model', 'MLPModel')
+RandomForestVolatilityModel = try_import_model('volatility_surface.models.random_forest', 'RandomForestVolatilityModel')
+SVRModel = try_import_model('volatility_surface.models.svr_model', 'SVRModel')
+XGBoostModel = try_import_model('volatility_surface.models.xgboost_model', 'XGBoostModel')
+
+# Import VolatilitySurfaceGenerator
+try:
+    # Multiple attempts for the generator
+    import_attempts = [
+        lambda: __import__('volatility_surface.surface_generator', fromlist=['VolatilitySurfaceGenerator']),
+        lambda: __import__('src.volatility_surface.surface_generator', fromlist=['VolatilitySurfaceGenerator']),
+        lambda: __import__('volatility_surface.base', fromlist=['VolatilitySurfaceGenerator']),
+    ]
+    
+    for attempt in import_attempts:
+        try:
+            module = attempt()
+            VolatilitySurfaceGenerator = getattr(module, 'VolatilitySurfaceGenerator', None)
+            if VolatilitySurfaceGenerator is not None:
+                logger.info("✓ Imported VolatilitySurfaceGenerator")
+                break
+        except Exception as e:
+            logger.debug(f"Surface generator import attempt failed: {e}")
+            continue
+except Exception as e:
+    logger.warning(f"VolatilitySurfaceGenerator import failed: {e}")
 
 # =============================
 # Enhanced DummyModel that mimics your actual models
@@ -327,7 +461,7 @@ def main():
     with st.expander("🔧 Import & Training Status", expanded=True):
         st.write("**Available Models:**", AVAILABLE_MODELS)
         modules = [
-            ("VolatilityModelBase", BASE_AVAILABLE),
+            ("VolatilityModelBase", VolatilityModelBase is not None),
             ("VolatilitySurfaceGenerator", VolatilitySurfaceGenerator is not None),
             ("MLPModel", MLPModel is not None),
             ("RandomForest", RandomForestVolatilityModel is not None),
