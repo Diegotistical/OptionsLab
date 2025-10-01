@@ -106,7 +106,6 @@ try:
     import_attempts = [
         lambda: __import__('volatility_surface.base', fromlist=['VolatilityModelBase']),
         lambda: __import__('src.volatility_surface.base', fromlist=['VolatilityModelBase']),
-        lambda: __import__('base', fromlist=['VolatilityModelBase'])
     ]
     
     for attempt in import_attempts:
@@ -131,6 +130,7 @@ except Exception as e:
         def __init__(self, feature_columns=None, enable_benchmark=False):
             self.feature_columns = feature_columns or []
             self.enable_benchmark = enable_benchmark
+            self.scaler = StandardScaler()
             self.trained = False
 
         def train(self, df, val_split=0.2):
@@ -180,7 +180,6 @@ try:
     import_attempts = [
         lambda: __import__('volatility_surface.surface_generator', fromlist=['VolatilitySurfaceGenerator']),
         lambda: __import__('src.volatility_surface.surface_generator', fromlist=['VolatilitySurfaceGenerator']),
-        lambda: __import__('volatility_surface.base', fromlist=['VolatilitySurfaceGenerator']),
     ]
     
     for attempt in import_attempts:
@@ -203,20 +202,17 @@ class EnhancedDummyModel:
     """Dummy model that properly mimics your actual model interface"""
     def __init__(self, **kwargs):
         self.params = kwargs or {}
-        self.feature_names_in_ = [
+        self.feature_columns = [
             "moneyness", "log_moneyness", "time_to_maturity", 
             "ttm_squared", "risk_free_rate", "historical_volatility", "volatility_skew"
         ]
+        self.scaler = StandardScaler()
         self.name = "EnhancedDummyModel"
         self.trained = False
-        self.is_trained = False
-        # Initialize scaler to avoid fit_transform error
-        self.scaler_ = StandardScaler()
 
     def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
         logger.info("EnhancedDummyModel.train called")
         self.trained = True
-        self.is_trained = True
         return {
             "train_rmse": 0.1, 
             "val_rmse": 0.12, 
@@ -267,19 +263,10 @@ def create_model_instance(name: str, **kwargs):
         # Set initial state to untrained (mimic real model behavior)
         if hasattr(instance, 'trained'):
             instance.trained = False
-        if hasattr(instance, 'is_trained'):
-            instance.is_trained = False
-            
-        # Initialize scaler to avoid fit_transform error and ensure it's not fitted
-        if hasattr(instance, 'scaler_'):
-            instance.scaler_ = StandardScaler()
-        if hasattr(instance, 'scaler'):
-            instance.scaler = StandardScaler()
-        # Also handle other possible scaler attributes
-        if hasattr(instance, '_scaler'):
-            instance._scaler = StandardScaler()
-        if hasattr(instance, 'feature_scaler'):
-            instance.feature_scaler = StandardScaler()
+        if hasattr(instance, 'scaler') and hasattr(instance.scaler, 'fit') and hasattr(instance.scaler, 'transform'):
+            # Initialize scaler to avoid fit_transform error and ensure it's not fitted
+            # For models that inherit from VolatilityModelBase, scaler is already initialized
+            pass
 
         return instance
     except Exception as e:
@@ -329,10 +316,6 @@ def safe_model_predict_volatility(model: Any, df: pd.DataFrame) -> np.ndarray:
 
         # Check other training indicators
         if hasattr(model, 'trained') and not model.trained:
-            logger.warning("Model marked as not trained, using fallback")
-            return generate_fallback_prediction(df)
-
-        if hasattr(model, 'is_trained') and not model.is_trained:
             logger.warning("Model marked as not trained, using fallback")
             return generate_fallback_prediction(df)
 
