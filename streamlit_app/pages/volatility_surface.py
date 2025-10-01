@@ -249,6 +249,11 @@ def create_model_instance(name: str, **kwargs):
             instance.trained = False
         if hasattr(instance, 'is_trained'):
             instance.is_trained = False
+        # Also handle scaler state
+        if hasattr(instance, 'scaler_'):
+            instance.scaler_ = None
+        if hasattr(instance, 'scaler'):
+            instance.scaler = None
 
         return instance
     except Exception as e:
