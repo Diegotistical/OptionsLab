@@ -1,3 +1,6 @@
+# =============================
+# Standard Imports
+# =============================
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -5,8 +8,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import logging
-import traceback
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import time
@@ -15,51 +18,47 @@ import hashlib
 import math
 
 # =============================
-# Enhanced Import System
+# Path Setup (for Streamlit Cloud + Local Dev)
 # =============================
+BASE_DIR = Path(__file__).resolve().parent
+SRC_DIRS = [
+    BASE_DIR / "src",              # local dev
+    BASE_DIR.parent / "src",       # streamlit cloud layout
+    BASE_DIR                       # current dir
+]
 
-# Add the src directory to the Python path
-src_path = Path(__file__).parent / "src"
-sys.path.insert(0, str(src_path))
+for p in SRC_DIRS:
+    if p.exists() and str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
-# Also add the current directory to handle direct imports
-current_dir = Path(__file__).parent
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
-
-print("Using src path:", src_path)
-print("Using current dir:", current_dir)
-
-# Optional external imports
+# =============================
+# External Optional Imports
+# =============================
 try:
     from scipy.stats import norm
-except Exception:
+except ImportError:
     class _NormFallback:
         @staticmethod
         def cdf(x):
             return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
     norm = _NormFallback()
 
-# Try to import StandardScaler for model initialization
 try:
     from sklearn.preprocessing import StandardScaler
 except ImportError:
-    # Create a minimal scaler fallback if sklearn is not available
     class StandardScaler:
         def fit(self, X):
             self.mean_ = np.mean(X, axis=0)
             self.scale_ = np.std(X, axis=0)
-            self.scale_[self.scale_ == 0] = 1  # Prevent division by zero
+            self.scale_[self.scale_ == 0] = 1
             return self
-        
         def transform(self, X):
             return (X - self.mean_) / self.scale_
-        
         def fit_transform(self, X):
             return self.fit(X).transform(X)
 
 # =============================
-# Logging
+# Logging Setup
 # =============================
 logger = logging.getLogger("vol_surface_prod")
 logger.setLevel(logging.INFO)
@@ -69,173 +68,40 @@ if not logger.handlers:
     logger.addHandler(h)
 
 # =============================
-# Setup Import Paths
+# Direct Model Imports
 # =============================
-def setup_import_paths():
-    """Setup import paths for your specific structure"""
-    possible_paths = [
-        Path("/mount/src/optionslab/src"),  # Streamlit Cloud path
-        Path.cwd() / "src",                # Local development
-        Path.cwd().parent / "src", 
-        Path(__file__).parent / "src",
-        Path(__file__).parent.parent / "src",
-        Path(__file__).parent,             # Direct access to streamlit_app
-    ]
-
-    added_paths = []
-    for path in possible_paths:
-        if path.exists() and str(path) not in sys.path:
-            sys.path.insert(0, str(path))
-            added_paths.append(str(path))
-            logger.info(f"Added to sys.path: {path}")
-
-    return added_paths
-
-added_paths = setup_import_paths()
-
-# =============================
-# DIRECT IMPORTS WITH PROPER ERROR HANDLING
-# =============================
-
-logger.info("=== ATTEMPTING DIRECT IMPORTS ===")
-
-# Import base first since models depend on it
-VolatilityModelBase = None
 try:
-    # Try multiple import paths
-    import_attempts = [
-        lambda: __import__('volatility_surface.base', fromlist=['VolatilityModelBase']),
-        lambda: __import__('src.volatility_surface.base', fromlist=['VolatilityModelBase']),
-    ]
-    
-    for attempt in import_attempts:
-        try:
-            base_module = attempt()
-            VolatilityModelBase = getattr(base_module, 'VolatilityModelBase')
-            logger.info("✓ Imported VolatilityModelBase")
-            BASE_AVAILABLE = True
-            break
-        except Exception as e:
-            logger.warning(f"Import attempt failed: {e}")
-            continue
-    
-    if VolatilityModelBase is None:
-        raise ImportError("Could not import VolatilityModelBase from any path")
-        
+    from volatility_surface.base import VolatilityModelBase
+    from volatility_surface.models.mlp_model import MLPModel
+    from volatility_surface.models.random_forest import RandomForestVolatilityModel
+    from volatility_surface.models.svr_model import SVRModel
+    from volatility_surface.models.xgboost_model import XGBoostModel
+    from volatility_surface.surface_generator import VolatilitySurfaceGenerator
+    logger.info("✓ Successfully imported all volatility surface modules")
 except Exception as e:
-    logger.warning(f"VolatilityModelBase import failed: {e}")
-    BASE_AVAILABLE = False
-    # Create a dummy base class for fallback
+    logger.error(f"Model import failed: {e}")
+    # Fallbacks only if absolutely necessary
     class VolatilityModelBase:
         def __init__(self, feature_columns=None, enable_benchmark=False):
             self.feature_columns = feature_columns or []
-            self.enable_benchmark = enable_benchmark
             self.scaler = StandardScaler()
             self.trained = False
-
         def train(self, df, val_split=0.2):
             self.trained = True
             return {"status": "trained"}
-
         def predict_volatility(self, df):
             if not self.trained:
-                raise RuntimeError("Model is not trained or initialized.")
+                raise RuntimeError("Model is not trained.")
             return np.full(len(df), 0.2)
 
-# Now import the models with multiple path attempts
-VolatilitySurfaceGenerator = None
-MLPModel = None
-RandomForestVolatilityModel = None  
-SVRModel = None
-XGBoostModel = None
-
-def try_import_model(module_path, class_name):
-    """Helper function to try importing models from multiple paths"""
-    import_attempts = [
-        lambda: __import__(module_path, fromlist=[class_name]),
-        lambda: __import__(f"src.{module_path}", fromlist=[class_name]),
-        lambda: __import__(f"volatility_surface.models.{class_name.lower().replace('model', '')}", fromlist=[class_name]),
-    ]
-    
-    for attempt in import_attempts:
-        try:
-            module = attempt()
-            model_class = getattr(module, class_name)
-            logger.info(f"✓ Imported {class_name}")
-            return model_class
-        except Exception as e:
-            logger.debug(f"Failed to import {class_name} from attempt: {e}")
-            continue
-    return None
-
-# Import models
-MLPModel = try_import_model('volatility_surface.models.mlp_model', 'MLPModel')
-RandomForestVolatilityModel = try_import_model('volatility_surface.models.random_forest', 'RandomForestVolatilityModel')
-SVRModel = try_import_model('volatility_surface.models.svr_model', 'SVRModel')
-XGBoostModel = try_import_model('volatility_surface.models.xgboost_model', 'XGBoostModel')
-
-# Import VolatilitySurfaceGenerator
-try:
-    # Multiple attempts for the generator
-    import_attempts = [
-        lambda: __import__('volatility_surface.surface_generator', fromlist=['VolatilitySurfaceGenerator']),
-        lambda: __import__('src.volatility_surface.surface_generator', fromlist=['VolatilitySurfaceGenerator']),
-    ]
-    
-    for attempt in import_attempts:
-        try:
-            module = attempt()
-            VolatilitySurfaceGenerator = getattr(module, 'VolatilitySurfaceGenerator', None)
-            if VolatilitySurfaceGenerator is not None:
-                logger.info("✓ Imported VolatilitySurfaceGenerator")
-                break
-        except Exception as e:
-            logger.debug(f"Surface generator import attempt failed: {e}")
-            continue
-except Exception as e:
-    logger.warning(f"VolatilitySurfaceGenerator import failed: {e}")
-
-# =============================
-# Enhanced DummyModel that mimics your actual models
-# =============================
-class EnhancedDummyModel:
-    """Dummy model that properly mimics your actual model interface"""
-    def __init__(self, **kwargs):
-        self.params = kwargs or {}
-        self.feature_columns = [
-            "moneyness", "log_moneyness", "time_to_maturity", 
-            "ttm_squared", "risk_free_rate", "historical_volatility", "volatility_skew"
-        ]
-        self.scaler = StandardScaler()
-        self.name = "EnhancedDummyModel"
-        self.trained = False
-
-    def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
-        logger.info("EnhancedDummyModel.train called")
-        self.trained = True
-        return {
-            "train_rmse": 0.1, 
-            "val_rmse": 0.12, 
-            "val_r2": 0.85, 
-            "note": "EnhancedDummyModel - proper training simulation"
-        }
-
-    def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
-        if not self.trained:
-            # Simulate the exact error your real models throw
-            raise RuntimeError("Model is not trained or initialized.")
-
-        # Realistic volatility surface prediction
-        m = df["moneyness"].to_numpy()
-        t = df["time_to_maturity"].to_numpy()
-        base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
-        smile = 0.03 * (m - 1.0) ** 2
-        return np.clip(base + smile, 0.03, 0.6)
-
-    def _assert_trained(self):
-        """Mimic the real model's training check"""
-        if not self.trained:
-            raise RuntimeError("Model is not trained or initialized.")
+    class EnhancedDummyModel(VolatilityModelBase):
+        def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
+            m = df["moneyness"].to_numpy()
+            t = df["time_to_maturity"].to_numpy()
+            base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
+            smile = 0.03 * (m - 1.0) ** 2
+            return np.clip(base + smile, 0.03, 0.6)
+    MLPModel = RandomForestVolatilityModel = SVRModel = XGBoostModel = VolatilitySurfaceGenerator = EnhancedDummyModel
 
 # =============================
 # Smart Model Factory with Training Detection
