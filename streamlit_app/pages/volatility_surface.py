@@ -80,28 +80,6 @@ try:
     logger.info("✓ Successfully imported all volatility surface modules")
 except Exception as e:
     logger.error(f"Model import failed: {e}")
-    # Fallbacks only if absolutely necessary
-    class VolatilityModelBase:
-        def __init__(self, feature_columns=None, enable_benchmark=False):
-            self.feature_columns = feature_columns or []
-            self.scaler = StandardScaler()
-            self.trained = False
-        def train(self, df, val_split=0.2):
-            self.trained = True
-            return {"status": "trained"}
-        def predict_volatility(self, df):
-            if not self.trained:
-                raise RuntimeError("Model is not trained.")
-            return np.full(len(df), 0.2)
-
-    class EnhancedDummyModel(VolatilityModelBase):
-        def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
-            m = df["moneyness"].to_numpy()
-            t = df["time_to_maturity"].to_numpy()
-            base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
-            smile = 0.03 * (m - 1.0) ** 2
-            return np.clip(base + smile, 0.03, 0.6)
-    MLPModel = RandomForestVolatilityModel = SVRModel = XGBoostModel = VolatilitySurfaceGenerator = EnhancedDummyModel
 
 # =============================
 # Smart Model Factory with Training Detection
@@ -116,28 +94,21 @@ def create_model_instance(name: str, **kwargs):
     }
 
     model_class = model_map.get(name)
-
     if model_class is None:
-        logger.info(f"Using EnhancedDummyModel for {name} - no class found")
-        return EnhancedDummyModel(**kwargs)
+        raise ValueError(f"No model class found for '{name}'")
 
     try:
         logger.info(f"Attempting to create {name} instance")
         instance = model_class(**kwargs)
         logger.info(f"✓ Successfully created {name} instance")
 
-        # Set initial state to untrained (mimic real model behavior)
         if hasattr(instance, 'trained'):
             instance.trained = False
-        if hasattr(instance, 'scaler') and hasattr(instance.scaler, 'fit') and hasattr(instance.scaler, 'transform'):
-            # Initialize scaler to avoid fit_transform error and ensure it's not fitted
-            # For models that inherit from VolatilityModelBase, scaler is already initialized
-            pass
 
         return instance
     except Exception as e:
         logger.error(f"Failed to create {name}: {e}")
-        return EnhancedDummyModel(**kwargs)
+        raise RuntimeError(f"Cannot create model '{name}': {e}")
 
 # Get available models
 MODEL_NAMES = ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"]
@@ -153,10 +124,6 @@ for name in MODEL_NAMES:
 
     if model_class is not None:
         AVAILABLE_MODELS.append(name)
-
-if not AVAILABLE_MODELS:
-    AVAILABLE_MODELS = ["EnhancedDummyModel"]
-    logger.info("No custom models available, using EnhancedDummyModel")
 
 logger.info(f"Available models: {AVAILABLE_MODELS}")
 
