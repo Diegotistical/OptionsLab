@@ -1,149 +1,48 @@
 
-# streamlit_vol_surface_prod_visual_greeks.py
-"""
-Production-ready Volatility Surface Visual Explorer - Fixed Import Version
-"""
-
-import streamlit as st
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-import logging
-import traceback
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-import time
-import json
-import hashlib
-import math
 
 # =============================
 # Enhanced Import System
 # =============================
 
-src_path = Path(__file__).parent / "src"
-sys.path.insert(0, str(src_path))
+# Get project root (two levels up from this file)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
 
-print("Using src path:", src_path)
-
-
-# Optional external imports
-try:
-    from scipy.stats import norm
-except Exception:
-    class _NormFallback:
-        @staticmethod
-        def cdf(x):
-            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-    norm = _NormFallback()
+if SRC_PATH.exists():
+    sys.path.insert(0, str(SRC_PATH))
+    print(f"Added to sys.path: {SRC_PATH}")
+else:
+    print(f"WARNING: SRC_PATH not found -> {SRC_PATH}")
 
 # =============================
-# Logging
+# Third-party imports
 # =============================
-logger = logging.getLogger("vol_surface_prod")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logger.addHandler(h)
-
-# =============================
-# Setup Import Paths
-# =============================
-def setup_import_paths():
-    """Setup import paths for your specific structure"""
-    possible_paths = [
-        Path("/mount/src/optionslab/src"),
-        Path.cwd() / "src",
-        Path.cwd().parent / "src", 
-        Path(__file__).parent / "src",
-        Path(__file__).parent.parent / "src",
-    ]
-
-    added_paths = []
-    for path in possible_paths:
-        if path.exists() and str(path) not in sys.path:
-            sys.path.insert(0, str(path))
-            added_paths.append(str(path))
-            logger.info(f"Added to sys.path: {path}")
-
-    return added_paths
-
-added_paths = setup_import_paths()
+import streamlit as st
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import hashlib
+import json
+import logging
+from typing import Any, Dict, Optional
 
 # =============================
-# DIRECT IMPORTS WITH PROPER ERROR HANDLING
+# Your package imports
 # =============================
+from volatility_surface.base import VolatilityModelBase
+from volatility_surface.surface_generator import VolatilitySurfaceGenerator
+from volatility_surface.models.mlp_model import MLPModel
+from volatility_surface.models.random_forest import RandomForestVolatilityModel
+from volatility_surface.models.svr_model import SVRModel
+from volatility_surface.models.xgboost_model import XGBoostModel
 
-logger.info("=== ATTEMPTING DIRECT IMPORTS ===")
-
-# Import base first since models depend on it
-try:
-    from volatility_surface.base import VolatilityModelBase
-    logger.info("✓ Imported VolatilityModelBase")
-    BASE_AVAILABLE = True
-except Exception as e:
-    logger.warning(f"VolatilityModelBase import failed: {e}")
-    BASE_AVAILABLE = False
-    # Create a dummy base class for fallback
-    class VolatilityModelBase:
-        def __init__(self, feature_columns=None, enable_benchmark=False):
-            self.feature_columns = feature_columns or []
-            self.enable_benchmark = enable_benchmark
-            self.trained = False
-
-        def train(self, df, val_split=0.2):
-            self.trained = True
-            return {"status": "trained"}
-
-        def predict_volatility(self, df):
-            if not self.trained:
-                raise RuntimeError("Model is not trained or initialized.")
-            return np.full(len(df), 0.2)
-
-# Now import the models
-VolatilitySurfaceGenerator = None
-MLPModel = None
-RandomForestVolatilityModel = None  
-SVRModel = None
-XGBoostModel = None
-
-try:
-    from volatility_surface.surface_generator import VolatilitySurfaceGenerator
-    logger.info("✓ Imported VolatilitySurfaceGenerator")
-except Exception as e:
-    logger.warning(f"VolatilitySurfaceGenerator import failed: {e}")
-
-try:
-    from volatility_surface.models.mlp_model import MLPModel
-    logger.info("✓ Imported MLPModel")
-except Exception as e:
-    logger.warning(f"MLPModel import failed: {e}")
-    MLPModel = None
-
-try:
-    from volatility_surface.models.random_forest import RandomForestVolatilityModel
-    logger.info("✓ Imported RandomForestVolatilityModel")
-except Exception as e:
-    logger.warning(f"RandomForestVolatilityModel import failed: {e}")
-    RandomForestVolatilityModel = None
-
-try:
-    from volatility_surface.models.svr_model import SVRModel
-    logger.info("✓ Imported SVRModel")
-except Exception as e:
-    logger.warning(f"SVRModel import failed: {e}")
-    SVRModel = None
-
-try:
-    from volatility_surface.models.xgboost_model import XGBoostModel
-    logger.info("✓ Imported XGBoostModel")
-except Exception as e:
-    logger.warning(f"XGBoostModel import failed: {e}")
-    XGBoostModel = None
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # =============================
 # Enhanced DummyModel that mimics your actual models
