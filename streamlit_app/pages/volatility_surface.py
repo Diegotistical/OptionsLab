@@ -269,11 +269,17 @@ def create_model_instance(name: str, **kwargs):
             instance.trained = False
         if hasattr(instance, 'is_trained'):
             instance.is_trained = False
-        # Initialize scaler to avoid fit_transform error
+            
+        # Initialize scaler to avoid fit_transform error and ensure it's not fitted
         if hasattr(instance, 'scaler_'):
             instance.scaler_ = StandardScaler()
         if hasattr(instance, 'scaler'):
             instance.scaler = StandardScaler()
+        # Also handle other possible scaler attributes
+        if hasattr(instance, '_scaler'):
+            instance._scaler = StandardScaler()
+        if hasattr(instance, 'feature_scaler'):
+            instance.feature_scaler = StandardScaler()
 
         return instance
     except Exception as e:
