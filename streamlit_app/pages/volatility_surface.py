@@ -40,6 +40,24 @@ except Exception:
             return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
     norm = _NormFallback()
 
+# Try to import StandardScaler for model initialization
+try:
+    from sklearn.preprocessing import StandardScaler
+except ImportError:
+    # Create a minimal scaler fallback if sklearn is not available
+    class StandardScaler:
+        def fit(self, X):
+            self.mean_ = np.mean(X, axis=0)
+            self.scale_ = np.std(X, axis=0)
+            self.scale_[self.scale_ == 0] = 1  # Prevent division by zero
+            return self
+        
+        def transform(self, X):
+            return (X - self.mean_) / self.scale_
+        
+        def fit_transform(self, X):
+            return self.fit(X).transform(X)
+
 # =============================
 # Logging
 # =============================
@@ -192,6 +210,8 @@ class EnhancedDummyModel:
         self.name = "EnhancedDummyModel"
         self.trained = False
         self.is_trained = False
+        # Initialize scaler to avoid fit_transform error
+        self.scaler_ = StandardScaler()
 
     def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
         logger.info("EnhancedDummyModel.train called")
@@ -249,11 +269,11 @@ def create_model_instance(name: str, **kwargs):
             instance.trained = False
         if hasattr(instance, 'is_trained'):
             instance.is_trained = False
-        # Also handle scaler state
+        # Initialize scaler to avoid fit_transform error
         if hasattr(instance, 'scaler_'):
-            instance.scaler_ = None
+            instance.scaler_ = StandardScaler()
         if hasattr(instance, 'scaler'):
-            instance.scaler = None
+            instance.scaler = StandardScaler()
 
         return instance
     except Exception as e:
