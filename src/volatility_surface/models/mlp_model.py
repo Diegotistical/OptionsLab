@@ -23,6 +23,7 @@ FEATURE_COLUMNS = [
     'historical_volatility', 'volatility_skew'
 ]
 
+
 class MLPModel(VolatilityModelBase, nn.Module):
     def __init__(
         self,
@@ -126,6 +127,8 @@ class MLPModel(VolatilityModelBase, nn.Module):
         return base_loss
 
     def _train_impl(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
+        if df is None:
+            raise ValueError("DataFrame `df` must be provided to train the model.")
         with self._lock:
             self._on_train_start(df)
             train_df, val_df = train_test_split(df, test_size=val_split, random_state=42)
@@ -184,11 +187,13 @@ class MLPModel(VolatilityModelBase, nn.Module):
                 self.scheduler.step(val_loss)
 
             self.load_state_dict(self.best_state)
-            self.trained = True  # ✅ mark trained after successful training
+            self.trained = True
             self._on_train_end({"train_loss": train_loss, "val_loss": best_val_loss})
             return {"train_loss": train_loss, "val_loss": best_val_loss}
 
     def predict_volatility(self, df: pd.DataFrame, mc_samples: int = 1, compute_greeks: bool = False):
+        if df is None:
+            raise ValueError("DataFrame `df` must be provided for prediction.")
         with self._lock:
             self._on_predict_start(df)
             features = self._prepare_data(df)

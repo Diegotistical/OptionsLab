@@ -16,10 +16,12 @@ import time
 import json
 import hashlib
 import math
+import os
+import threading
 
 # =============================
 # Path Setup (for Streamlit Cloud + Local Dev)
-# =============================
+# ============================= 
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIRS = [
     BASE_DIR / "src",              # local dev
@@ -31,41 +33,25 @@ for p in SRC_DIRS:
     if p.exists() and str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-# =============================
-# External Optional Imports
-# =============================
-try:
-    from scipy.stats import norm
-except ImportError:
-    class _NormFallback:
-        @staticmethod
-        def cdf(x):
-            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-    norm = _NormFallback()
-
-try:
-    from sklearn.preprocessing import StandardScaler
-except ImportError:
-    class StandardScaler:
-        def fit(self, X):
-            self.mean_ = np.mean(X, axis=0)
-            self.scale_ = np.std(X, axis=0)
-            self.scale_[self.scale_ == 0] = 1
-            return self
-        def transform(self, X):
-            return (X - self.mean_) / self.scale_
-        def fit_transform(self, X):
-            return self.fit(X).transform(X)
-
-# =============================
 # Logging Setup
-# =============================
+
 logger = logging.getLogger("vol_surface_prod")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
     h = logging.StreamHandler(sys.stdout)
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(h)
+
+# Model Imports
+try:
+    from volatility_surface.models.mlp_model import MLPModel
+    from volatility_surface.models.random_forest import RandomForestVolatilityModel
+    from volatility_surface.models.svr_model import SVRModel
+    from volatility_surface.models.xgboost_model import XGBoostModel
+    from volatility_surface.surface_generator import VolatilitySurfaceGenerator
+    logger.info("✓ Models imported successfully")
+except Exception as e:
+    logger.error(f"Model import failed: {e}")
 
 # =============================
 # Direct Model Imports
