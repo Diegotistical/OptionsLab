@@ -1,7 +1,7 @@
 # src/volatility_surface/models/random_forest.py
 
 import threading
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor

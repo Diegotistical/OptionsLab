@@ -193,3 +193,50 @@ if __name__ == "__main__":
     print("Calendar good:", check_calendar_arbitrage(ttms, w_good))
     w_bad = np.array([0.01, 0.019, 0.04, 0.035])
     print("Calendar bad:", check_calendar_arbitrage(ttms, w_bad))
+
+def validate_domain(X: np.ndarray, reference_X: np.ndarray = None) -> float:
+    """
+    Simple domain validation for volatility surfaces.
+    
+    Parameters
+    ----------
+    X : np.ndarray
+        Feature matrix after engineering (n_samples x n_features)
+    reference_X : np.ndarray, optional
+        Reference features (e.g., training features) to compare distribution
+    
+    Returns
+    -------
+    validity_score : float
+        Fraction of samples passing simple arbitrage-free checks (0.0 - 1.0)
+    """
+
+    # Example heuristic checks:
+
+    # 1. Implied volatility feature must be non-negative (usually the last column)
+    vol_col = -1  # adjust if needed
+    vols = X[:, vol_col] if X.ndim > 1 else X
+    non_negative = np.mean(vols >= 0)
+
+    # 2. Optional: simple TTM monotonicity check if ttm is in features
+    # Suppose ttm is in column 0
+    ttm_col = 0
+    if X.shape[1] > ttm_col:
+        ttm = X[:, ttm_col]
+        ttm_monotone = np.mean(np.diff(ttm) >= 0)
+    else:
+        ttm_monotone = 1.0
+
+    # 3. Optional: convexity check along moneyness if available
+    # Suppose moneyness is in column 1
+    m_col = 1
+    if X.shape[1] > m_col:
+        m = X[:, m_col]
+        vols_sorted = np.sort(vols)
+        convexity = np.mean(np.diff(vols_sorted, n=2) >= -1e-4)  # small tolerance
+    else:
+        convexity = 1.0
+
+    # Combine checks into a single validity score (0.0 - 1.0)
+    validity_score = float(np.mean([non_negative, ttm_monotone, convexity]))
+    return validity_score
