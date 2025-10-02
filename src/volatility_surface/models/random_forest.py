@@ -1,27 +1,18 @@
-# src / volatility_surface / models / random_forest.py
+# src/volatility_surface/models/random_forest.py
 
-from typing import Dict
+from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 import joblib
 import os
-from typing import Optional
 import logging
 from ..base import VolatilityModelBase
-
-# Configure logging
+from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
-
-class RandomForestVolatilityModel(VolatilityModelBase[RandomForestRegressor]):
-    """
-    Concrete volatility model using RandomForestRegressor.
-
-    Implements train, predict, save/load with thread safety, hooks, and benchmarking.
-    """
-
+class RandomForestVolatilityModel(VolatilityModelBase):
     def __init__(self,
                  feature_columns: Optional[list] = None,
                  rf_params: Optional[Dict] = None,
@@ -33,28 +24,26 @@ class RandomForestVolatilityModel(VolatilityModelBase[RandomForestRegressor]):
             'n_jobs': -1,
             'random_state': 42
         }))
+        self.scaler = StandardScaler()  # ✅ ensure scaler exists
 
     def _train_impl(self, df: pd.DataFrame, val_split: float) -> Dict[str, float]:
         if 'implied_volatility' not in df.columns:
             raise ValueError("'implied_volatility' column is required for training.")
 
-        # Shuffle and split data
         df = df.sample(frac=1, random_state=42).reset_index(drop=True)
         n_val = int(len(df) * val_split)
         train_df = df.iloc[:-n_val]
         val_df = df.iloc[-n_val:]
 
-        # Prepare features and targets
         X_train = self._prepare_features(train_df, fit_scaler=True)
         y_train = train_df['implied_volatility'].values.astype(np.float64)
 
         X_val = self._prepare_features(val_df)
         y_val = val_df['implied_volatility'].values.astype(np.float64)
 
-        # Fit model
         self.model.fit(X_train, y_train)
+        self.trained = True  # ✅ mark trained
 
-        # Predict validation
         y_val_pred = self.model.predict(X_val)
 
         from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
@@ -69,8 +58,7 @@ class RandomForestVolatilityModel(VolatilityModelBase[RandomForestRegressor]):
 
     def _predict_impl(self, df: pd.DataFrame) -> np.ndarray:
         X = self._prepare_features(df)
-        preds = self.model.predict(X)
-        return preds
+        return self.model.predict(X)
 
     def _save_model_impl(self, model_path: str, scaler_path: str) -> None:
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
@@ -82,7 +70,7 @@ class RandomForestVolatilityModel(VolatilityModelBase[RandomForestRegressor]):
     def _load_model_impl(self, model_path: str, scaler_path: str) -> None:
         if not os.path.isfile(model_path) or not os.path.isfile(scaler_path):
             raise FileNotFoundError("Model or scaler file not found.")
-
         self.model = joblib.load(model_path)
         self.scaler = joblib.load(scaler_path)
+        self.trained = True
         logger.info(f"Model loaded from {model_path} and scaler loaded from {scaler_path}")
