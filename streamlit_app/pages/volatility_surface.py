@@ -47,7 +47,7 @@ try:
     from volatility_surface.models.mlp_model import MLPModel
     from volatility_surface.models.random_forest import RandomForestVolatilityModel
     from volatility_surface.models.svr_model import SVRModel
-    from volatility_surface.models.xgboost_model import XGBoostModel
+    from volatility_surface.models.xgboost_model import XGBVolatilityModel
     from volatility_surface.surface_generator import VolatilitySurfaceGenerator
     logger.info("✓ Models imported successfully")
 except Exception as e:
@@ -61,7 +61,7 @@ try:
     from volatility_surface.models.mlp_model import MLPModel
     from volatility_surface.models.random_forest import RandomForestVolatilityModel
     from volatility_surface.models.svr_model import SVRModel
-    from volatility_surface.models.xgboost_model import XGBoostModel
+    from volatility_surface.models.xgboost_model import XGBVolatilityModel
     from volatility_surface.surface_generator import VolatilitySurfaceGenerator
     logger.info("✓ Successfully imported all volatility surface modules")
 except Exception as e:
@@ -76,7 +76,7 @@ def create_model_instance(name: str, **kwargs):
         "MLP Neural Network": MLPModel,
         "Random Forest": RandomForestVolatilityModel, 
         "SVR": SVRModel,
-        "XGBoost": XGBoostModel
+        "XGBoost": XGBVolatilityModel
     }
 
     model_class = model_map.get(name)
@@ -105,7 +105,7 @@ for name in MODEL_NAMES:
         "MLP Neural Network": MLPModel,
         "Random Forest": RandomForestVolatilityModel,
         "SVR": SVRModel,
-        "XGBoost": XGBoostModel
+        "XGBoost": XGBVolatilityModel
     }.get(name)
 
     if model_class is not None:
@@ -299,7 +299,7 @@ def main():
             ("MLPModel", MLPModel is not None),
             ("RandomForest", RandomForestVolatilityModel is not None),
             ("SVRModel", SVRModel is not None),
-            ("XGBoostModel", XGBoostModel is not None),
+            ("XGBoostModel", XGBVolatilityModel is not None),
         ]
         for name, available in modules:
             status = "✅" if available else "❌"
