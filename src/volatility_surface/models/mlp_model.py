@@ -23,7 +23,6 @@ FEATURE_COLUMNS = [
     'historical_volatility', 'volatility_skew'
 ]
 
-
 class MLPModel(VolatilityModelBase, nn.Module):
     def __init__(
         self,
@@ -185,7 +184,7 @@ class MLPModel(VolatilityModelBase, nn.Module):
                 self.scheduler.step(val_loss)
 
             self.load_state_dict(self.best_state)
-            self.trained = True
+            self.trained = True  # ✅ mark trained after successful training
             self._on_train_end({"train_loss": train_loss, "val_loss": best_val_loss})
             return {"train_loss": train_loss, "val_loss": best_val_loss}
 
@@ -248,11 +247,7 @@ class MLPModel(VolatilityModelBase, nn.Module):
             self.trained = True
 
     def _predict_impl(self, X: Any) -> Any:
-            """
-            Implementation of the abstract method from VolatilityModelBase.
-            Converts input to tensor, passes through network, returns numpy array.
-            """
-            X_tensor = ensure_tensor(X, dtype=torch.float32)
-            with torch.no_grad():
-                y_pred = self.model(X_tensor)
-            return y_pred.numpy()
+        X_tensor = ensure_tensor(X, dtype=torch.float32)
+        with torch.no_grad():
+            y_pred = self.model(X_tensor)
+        return y_pred.numpy()
