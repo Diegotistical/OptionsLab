@@ -71,6 +71,15 @@ class SVRModel(VolatilityModelBase):
             }
             self._on_train_end(metrics)
             return metrics
+        
+    def _predict_impl(self, X: np.ndarray) -> np.ndarray:
+        """
+        Internal prediction method for SVRModel.
+        Called by the base class predict_volatility.
+        """
+        X_scaled = self.scaler.transform(X)
+        preds = self.model.predict(X_scaled)
+        return preds
 
     def predict_volatility(self, df: pd.DataFrame) -> np.ndarray:
         with self._lock:
