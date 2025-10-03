@@ -6,6 +6,7 @@ import math
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+import importlib.util # Added for dynamic imports
 
 import numpy as np
 import pandas as pd
@@ -23,20 +24,6 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 
-# Optional xgboost
-try:
-    from xgboost import XGBRegressor
-    XGBOOST_AVAILABLE = True
-except Exception:
-    XGBOOST_AVAILABLE = False
-
-# Optional scipy surface generator
-try:
-    from scipy.interpolate import RectBivariateSpline
-    SCIPY_AVAILABLE = True
-except Exception:
-    SCIPY_AVAILABLE = False
-
 # ---------------------------
 # Logging
 # ---------------------------
@@ -47,13 +34,29 @@ if not logger.handlers:
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(h)
 
+# Optional xgboost
+try:
+    from xgboost import XGBRegressor
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    logger.warning("XGBoost not available, using fallbacks.")
+
+# Optional scipy surface generator
+try:
+    from scipy.interpolate import RectBivariateSpline
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    logger.warning("Scipy not available for interpolation.")
+
 # ---------------------------
-# Ensure src of project is importable (robust)
+# Ensure src of project is importable
 # ---------------------------
 # Candidate locations to find your project 'src' folder on Streamlit Cloud or local dev
 CANDIDATE_SRC = [
-    Path(__file__).resolve().parent / "src",
-    Path(__file__).resolve().parent.parent / "src",
+    Path(__file__).resolve().parent / "src", # Path relative to the current script file (pages/volatility_surface.py) -> streamlit_app/src
+    Path(__file__).resolve().parent.parent / "src", # Path relative to streamlit_app directory -> optionslab/src
     Path.cwd() / "src",
     Path("src"),
     # Your machine path example (keeps safe if not present)
@@ -68,38 +71,14 @@ for p in CANDIDATE_SRC:
         logger.info("Inserted src path into sys.path: %s", p)
         break
 
-# Try to import project models (preferred)
-PROJECT_MODELS_AVAILABLE = False
-_project_import_error = None
-try:
-    from volatility_surface.models.mlp_model import MLPModel as ProjectMLPModel
-    from volatility_surface.models.random_forest import RandomForestVolatilityModel as ProjectRFModel
-    # SVR model may not exist in all repos; guard import
-    try:
-        from volatility_surface.models.svr_model import SVRModel as ProjectSVRModel
-    except Exception:
-        ProjectSVRModel = None
-    # xgboost model filename may vary; try common variants
-    try:
-        from volatility_surface.models.xgboost_model import XGBVolatilityModel as ProjectXGBModel
-    except Exception:
-        try:
-            from volatility_surface.models.xgb_model import XGBVolatilityModel as ProjectXGBModel
-        except Exception:
-            ProjectXGBModel = None
-
-    PROJECT_MODELS_AVAILABLE = True
-    logger.info("Project models imported successfully.")
-except Exception as e:
-    _project_import_error = str(e)
-    logger.warning("Project models not importable: %s", _project_import_error)
-    ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
+if SRC_DIR is None:
+    logger.warning("Could not find 'src' directory in candidate paths. Project models may not be available.")
 
 # ---------------------------
 # App constants & storage
 # ---------------------------
-APP_ROOT = Path(__file__).resolve().parent
-MODEL_DIR = APP_ROOT / "models"
+APP_ROOT = Path(__file__).resolve().parent # This is the 'pages' directory
+MODEL_DIR = APP_ROOT / "models" # Store models in the 'pages' directory
 MODEL_DIR.mkdir(exist_ok=True)
 REGISTRY_PATH = MODEL_DIR / "registry.json"
 
@@ -123,11 +102,69 @@ def load_registry() -> Dict[str, Any]:
         try:
             return json.loads(REGISTRY_PATH.read_text())
         except Exception:
+            logger.warning("Could not load registry JSON. Returning empty dict.")
             return {}
     return {}
 
 def save_registry(reg: Dict[str, Any]):
-    REGISTRY_PATH.write_text(json.dumps(reg, indent=2, default=str))
+    try:
+        REGISTRY_PATH.write_text(json.dumps(reg, indent=2, default=str))
+    except Exception as e:
+        logger.error("Failed to save registry: %s", e)
+
+# ---------------------------
+# Project Model Import Helper (Dynamic)
+# ---------------------------
+def _import_project_model(module_name: str, class_name: str):
+    """Dynamically import a project model class."""
+    full_module_name = f"volatility_surface.{module_name}"
+    try:
+        spec = importlib.util.spec_from_file_location(full_module_name, SRC_DIR / "volatility_surface" / module_name.replace('.', '/') + ".py")
+        if spec is None or spec.loader is None:
+             logger.warning(f"Could not load spec for {full_module_name}")
+             return None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[full_module_name] = module
+        spec.loader.exec_module(module)
+        model_class = getattr(module, class_name, None)
+        if model_class is None:
+            logger.warning(f"Class {class_name} not found in module {full_module_name}")
+            return None
+        logger.info(f"Successfully imported {class_name} from {full_module_name}")
+        return model_class
+    except Exception as e:
+        logger.warning(f"Failed to import {class_name} from {full_module_name}: {e}")
+        return None
+
+# Try to import project models (preferred) using dynamic imports
+PROJECT_MODELS_AVAILABLE = False
+_project_import_error = None
+ProjectMLPModel = None
+ProjectRFModel = None
+ProjectSVRModel = None
+ProjectXGBModel = None
+
+if SRC_DIR is not None and (SRC_DIR / "volatility_surface").is_dir():
+    try:
+        ProjectMLPModel = _import_project_model("models.mlp_model", "MLPModel")
+        ProjectRFModel = _import_project_model("models.random_forest", "RandomForestVolatilityModel")
+        ProjectSVRModel = _import_project_model("models.svr_model", "SVRModel") # Will be None if file doesn't exist
+        ProjectXGBModel = _import_project_model("models.xgboost_model", "XGBVolatilityModel") # Try standard name
+        if ProjectXGBModel is None: # If standard name failed, try alternative
+            ProjectXGBModel = _import_project_model("models.xgb_model", "XGBVolatilityModel")
+
+        # Check if at least one project model was loaded
+        if any(cls is not None for cls in [ProjectMLPModel, ProjectRFModel, ProjectSVRModel, ProjectXGBModel]):
+            PROJECT_MODELS_AVAILABLE = True
+            logger.info("At least one project model imported successfully.")
+        else:
+            logger.warning("No project models found or loaded successfully.")
+    except Exception as e:
+        _project_import_error = str(e)
+        logger.warning("Project models import failed: %s", _project_import_error)
+else:
+    logger.warning("SRC_DIR is None or 'volatility_surface' subdirectory does not exist.")
+
 
 # ---------------------------
 # Estimator / Project-model factory
@@ -222,7 +259,11 @@ def safe_predict(model_obj, df: pd.DataFrame) -> np.ndarray:
             # Some project methods accept df and return numpy
             return np.asarray(model_obj.predict_volatility(df))
         if hasattr(model_obj, "predict"):
-            return np.asarray(model_obj.predict(df if isinstance(df, np.ndarray) else df[FEATURE_COLUMNS]))
+            # Check if it's a sklearn pipeline or estimator expecting features
+            if hasattr(model_obj, 'steps'): # It's a Pipeline
+                return np.asarray(model_obj.predict(df[FEATURE_COLUMNS]))
+            else: # Assume it's an estimator expecting features
+                return np.asarray(model_obj.predict(df[FEATURE_COLUMNS]))
         # If model stores pipeline attribute
         if hasattr(model_obj, "pipeline"):
             return np.asarray(model_obj.pipeline.predict(df[FEATURE_COLUMNS]))
@@ -232,6 +273,9 @@ def safe_predict(model_obj, df: pd.DataFrame) -> np.ndarray:
             logger.warning("Model not trained: %s", e)
             return generate_fallback_prediction(df)
         raise
+    except AttributeError as e: # Handle missing methods like 'validate_input' in training
+        logger.warning("Attribute error during prediction: %s. Using fallback.", e)
+        return generate_fallback_prediction(df)
     except Exception as e:
         logger.error("Prediction error: %s", e)
 
@@ -256,10 +300,10 @@ def save_model_ui(name: str, model_obj: Any) -> Optional[str]:
                 reg = load_registry()
                 reg[name] = {"path": filename, "saved_at": time.time()}
                 save_registry(reg)
-                return path
-            except Exception:
-                # fallback to lower-level
-                pass
+                return str(MODEL_DIR / name) # Return the directory path for project models
+            except Exception as e:
+                logger.warning("Project save() failed: %s. Falling back to joblib.", e)
+                # If project save fails, fall through to joblib
 
         # Some project models implement _save_model_impl(model_path, scaler_path)
         if hasattr(model_obj, "_save_model_impl"):
@@ -268,16 +312,17 @@ def save_model_ui(name: str, model_obj: Any) -> Optional[str]:
             try:
                 model_obj._save_model_impl(model_path, scaler_path)
                 reg = load_registry()
-                reg[name] = {"path": filename, "saved_at": time.time(), "model_path": model_path, "scaler_path": scaler_path}
+                # Store specific paths for project models that use _save_model_impl
+                reg[name] = {"path": filename, "saved_at": time.time(), "model_path": model_path, "scaler_path": scaler_path, "type": "project_impl"}
                 save_registry(reg)
-                return path
+                return path # Return the generic path marker
             except Exception as e:
-                logger.warning("Project _save_model_impl failed: %s", e)
+                logger.warning("Project _save_model_impl failed: %s. Falling back to joblib.", e)
 
         # As final fallback use joblib for sklearn-style estimators or entire object
         joblib.dump(model_obj, path)
         reg = load_registry()
-        reg[name] = {"path": filename, "saved_at": time.time()}
+        reg[name] = {"path": filename, "saved_at": time.time(), "type": "joblib"}
         save_registry(reg)
         return path
     except Exception as e:
@@ -292,33 +337,50 @@ def load_model_ui(name: str) -> Optional[Any]:
     reg = load_registry()
     entry = reg.get(name)
     if not entry:
+        logger.warning(f"Model name '{name}' not found in registry.")
         return None
     try:
-        # If entry has explicit model_path & scaler_path try to use project's class loader
-        model_path = entry.get("model_path")
-        scaler_path = entry.get("scaler_path")
-        if model_path and scaler_path:
-            # Try to instantiate corresponding project model by name
-            # Heuristic: pick a class based on name patterns
-            lname = name.lower()
-            inst = None
-            if "mlp" in lname and ProjectMLPModel is not None:
-                inst = ProjectMLPModel()
-            elif ("forest" in lname or "random" in lname) and ProjectRFModel is not None:
-                inst = ProjectRFModel()
-            elif "svr" in lname and ProjectSVRModel is not None:
-                inst = ProjectSVRModel()
-            elif ("xgb" in lname or "xgboost" in lname) and ProjectXGBModel is not None:
-                inst = ProjectXGBModel()
+        # Check how the model was saved
+        save_type = entry.get("type", "joblib") # Default to joblib for backward compatibility
+        if save_type == "project_impl":
+            # Load using project-specific _load_model_impl
+            model_path = entry.get("model_path")
+            scaler_path = entry.get("scaler_path")
+            if model_path and scaler_path:
+                # Try to instantiate corresponding project model by name
+                # Heuristic: pick a class based on name patterns
+                lname = name.lower()
+                inst = None
+                if "mlp" in lname and ProjectMLPModel is not None:
+                    inst = ProjectMLPModel()
+                elif ("forest" in lname or "random" in lname) and ProjectRFModel is not None:
+                    inst = ProjectRFModel()
+                elif "svr" in lname and ProjectSVRModel is not None:
+                    inst = ProjectSVRModel()
+                elif ("xgb" in lname or "xgboost" in lname) and ProjectXGBModel is not None:
+                    inst = ProjectXGBModel()
 
-            if inst is not None and hasattr(inst, "_load_model_impl"):
-                inst._load_model_impl(model_path, scaler_path)
-                return inst
+                if inst is not None and hasattr(inst, "_load_model_impl"):
+                    try:
+                        inst._load_model_impl(model_path, scaler_path)
+                        logger.info(f"Loaded project model '{name}' using _load_model_impl.")
+                        return inst
+                    except Exception as e:
+                        logger.error(f"Failed to load project model '{name}' using _load_model_impl: {e}")
+                        return None
+                else:
+                    logger.warning(f"Could not instantiate or find project model class for '{name}' to load using _load_model_impl.")
 
-        # generic joblib path
+        # generic joblib path for sklearn/estimators or fallback
         path = MODEL_DIR / entry["path"]
         if path.exists():
-            return joblib.load(path)
+            loaded_model = joblib.load(path)
+            logger.info(f"Loaded model '{name}' using joblib.")
+            return loaded_model
+        else:
+            logger.error(f"Model file path does not exist: {path}")
+            return None
+
     except Exception as e:
         logger.error("Failed to load model %s: %s", name, e)
     return None
@@ -385,7 +447,8 @@ def main():
     if not PROJECT_MODELS_AVAILABLE:
         with st.expander("Import diagnostics", expanded=False):
             st.write("Project models were not importable. Fallback to sklearn/XGBoost will be used.")
-            st.write("Import error:", _project_import_error)
+            if _project_import_error:
+                st.write("Import error:", _project_import_error)
             st.write("Checked src path:", str(SRC_DIR) if SRC_DIR is not None else "no src path found")
 
     # Controls centered & full width
@@ -425,8 +488,10 @@ def main():
                 # instantiate
                 try:
                     model_obj = create_model_instance(model_choice)
+                    logger.info(f"Created model instance: {type(model_obj)}")
                 except Exception as e:
                     st.error(f"Failed to create model instance: {e}")
+                    logger.exception("Model creation failed.")
                     model_obj = None
 
                 if model_obj is not None:
@@ -434,14 +499,19 @@ def main():
                         try:
                             # If project model has `.train(df, val_split=...)` call that
                             if hasattr(model_obj, "train") and callable(model_obj.train):
+                                logger.info(f"Calling project model train method for {type(model_obj).__name__}")
+                                # Pass the DataFrame and validation split
                                 metrics = model_obj.train(df, val_split=0.2)
                                 # try to capture training history if available
                                 try:
                                     history = getattr(model_obj, "train_history", None)
+                                    if history is None: # Some models might use a different attribute name
+                                         history = getattr(model_obj, "training_history", None)
                                 except Exception:
                                     history = None
                             else:
                                 # fallback sklearn-style training pipeline
+                                logger.info(f"Using sklearn fallback training for {type(model_obj).__name__}")
                                 X = df.copy()
                                 y = X[TARGET_COLUMN]
                                 estimator = model_obj
@@ -465,7 +535,10 @@ def main():
                             st.session_state["last_trained"] = {"name": model_save_name, "model": model_obj, "metrics": metrics, "history": history}
                             st.session_state.setdefault("pred_cache", {})  # ensure cache exists
                             st.success("Training finished")
-                            st.experimental_rerun()
+                            # st.experimental_rerun() # Removed - deprecated. Streamlit will re-run naturally on state change.
+                        except AttributeError as e: # Catch errors like 'validate_input' missing
+                            st.error(f"Training failed due to an attribute error (likely missing method in project model): {e}")
+                            logger.exception("Training failed with AttributeError.")
                         except Exception as e:
                             st.error(f"Training failed: {e}")
                             logger.exception("Training error")
@@ -479,6 +552,11 @@ def main():
                 saved_path = save_model_ui(entry["name"], entry["model"])
                 if saved_path:
                     st.success(f"Saved model to {saved_path}")
+                    # Update registry entry with metrics if available
+                    reg = load_registry()
+                    if entry["name"] in reg:
+                        reg[entry["name"]].update(entry.get("metrics", {}))
+                        save_registry(reg)
                 else:
                     st.error("Failed to save model. Check logs.")
 
