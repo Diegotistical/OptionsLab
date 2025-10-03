@@ -1,4 +1,3 @@
-# volatility_surface.py
 import sys
 import os
 import json
@@ -71,6 +70,10 @@ for p in CANDIDATE_SRC:
 
 if SRC_DIR is None:
     logger.warning("Could not find 'src' directory in candidate paths. Project models may not be available.")
+    # --- FIX: Initialize PROJECT_MODELS_AVAILABLE to False if src not found ---
+    PROJECT_MODELS_AVAILABLE = False
+    _project_import_error = "SRC directory not found."
+    ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
 else:
     # Try to import project models (preferred)
     PROJECT_MODELS_AVAILABLE = False
@@ -391,6 +394,7 @@ def main():
     )
 
     # Status / debug: only show import details if models not present
+    # --- FIX: PROJECT_MODELS_AVAILABLE is now guaranteed to be defined ---
     if not PROJECT_MODELS_AVAILABLE:
         with st.expander("Import diagnostics", expanded=False):
             st.write("Project models were not importable. Fallback to sklearn/XGBoost will be used.")
