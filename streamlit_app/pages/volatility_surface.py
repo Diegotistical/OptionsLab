@@ -433,13 +433,13 @@ def main():
                             if isinstance(model_obj, Pipeline):
                                 estimator = model_obj.named_steps['est']
                             else:
-                                # --- NEW FIX: Handle project models correctly ---
+                                # --- NEWER FIX: Handle project models correctly, especially MLP ---
                                 # Project models often wrap an underlying sklearn estimator.
                                 # We need to extract that estimator for the pipeline.
                                 # Common attribute names for the underlying estimator in project models.
-                                estimator = getattr(model_obj, 'model', None) # e.g., MLPModel.model
+                                estimator = getattr(model_obj, 'model', None) # e.g., MLPModel.model, RF.model, SVR.model
                                 if estimator is None:
-                                    estimator = getattr(model_obj, 'estimator', None) # e.g., SVRModel.estimator
+                                    estimator = getattr(model_obj, 'estimator', None) # e.g., SVRModel.estimator (if different)
                                 if estimator is None:
                                     # If no underlying sklearn estimator is found,
                                     # assume the project model itself might implement fit/predict.
@@ -453,9 +453,37 @@ def main():
                                     # If it doesn't, the pipeline will error, which is the desired outcome to catch the bug.
                                     estimator = model_obj
                                     logger.info(f"Using project model instance directly as estimator: {type(estimator)}")
+                                else:
+                                    # Check if the extracted estimator is a PyTorch model (like Sequential for MLP)
+                                    # PyTorch models won't work in sklearn pipelines.
+                                    # We need to handle them differently.
+                                    import torch.nn
+                                    if isinstance(estimator, torch.nn.Module):
+                                        logger.info(f"Detected PyTorch model: {type(estimator)}. Using project model's own training.")
+                                        # --- Special case for PyTorch models like MLP ---
+                                        # Use the project model's internal training logic if available,
+                                        # or fall back to sklearn pipeline with a compatible estimator if possible.
+                                        # For now, let's assume the project model has its own fit/predict methods
+                                        # that handle the PyTorch model internally.
+                                        # The safest way might be to call the project model's train method if it exists and is fixed,
+                                        # or use a sklearn fallback for MLP.
+                                        # Since the logs show the internal train methods are buggy, let's force a sklearn fallback for MLP specifically.
+                                        # Identify if the original model_obj was an MLP type.
+                                        if isinstance(model_obj, ProjectMLPModel):
+                                            logger.info("MLP model detected, using sklearn MLPRegressor fallback.")
+                                            estimator = MLPRegressor(
+                                                hidden_layer_sizes=model_obj.config.get('hidden_sizes', (64, 64)),
+                                                max_iter=model_obj.config.get('max_iter', 400),
+                                                early_stopping=True,
+                                                random_state=DEFAULT_SEED
+                                            )
+                                        else:
+                                            # This shouldn't happen based on the error, but handle if another PyTorch model appears.
+                                            # For now, re-raise to indicate a problem if not MLP.
+                                            raise TypeError(f"PyTorch model {type(estimator)} not handled for sklearn pipeline in {type(model_obj)}")
 
                             # Build and fit the pipeline using the standard features
-                            # The scaler is applied first, then the estimator (which is now the underlying sklearn model or the project model itself if it's sklearn-compatible)
+                            # The scaler is applied first, then the estimator (which is now sklearn-compatible)
                             pipeline = Pipeline([("scaler", StandardScaler()), ("est", estimator)])
                             t0 = time.time()
                             # Use FEATURE_COLUMNS for the standard pipeline training
