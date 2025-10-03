@@ -37,76 +37,48 @@ try:
 except Exception:
     SCIPY_AVAILABLE = False
 
-# ---------------------------
-# Logging
-# ---------------------------
-logger = logging.getLogger("vol_surface_app")
+# =============================
+# Path Setup (for Streamlit Cloud + Local Dev)
+# ============================= 
+BASE_DIR = Path(__file__).resolve().parent
+SRC_DIRS = [
+    BASE_DIR / "src",              # local dev (if src is inside pages/)
+    BASE_DIR.parent / "src",       # streamlit cloud layout (src next to streamlit_app/)
+    BASE_DIR.parent.parent / "src", # alternative cloud layout (src at project root)
+    BASE_DIR                       # current dir (fallback)
+]
+
+for p in SRC_DIRS:
+    if p.exists() and str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+        logger.info(f"Inserted {p} into sys.path") # Log which path was added
+
+# Logging Setup
+logger = logging.getLogger("vol_surface_app") # Use a consistent logger name
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    h = logging.StreamHandler()
+    h = logging.StreamHandler(sys.stdout)
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(h)
 
-# ---------------------------
-# Ensure src of project is importable
-# ---------------------------
-# The script is running from /path/to/streamlit_app/pages/volatility_surface.py
-# The src folder is at /path/to/src
-# So we need to go up from pages/ to streamlit_app/, then up again to the project root (where src is).
-CANDIDATE_SRC = [
-    Path(__file__).resolve().parent.parent / "src", # Go up two levels from pages/ -> streamlit_app -> src/
-    Path(__file__).resolve().parent / ".." / "src",  # Go up from pages/ to streamlit_app/, then to src/ (this might also work depending on sys.path)
-    Path.cwd() / "src",
-    Path("src"),
-    # Your machine path example (keeps safe if not present)
-    Path.home() / "Coding" / "Python" / "OptionsLab" / "src",
-]
-
-SRC_DIR = None
-for p in CANDIDATE_SRC:
-    if p.exists() and str(p) not in sys.path:
-        sys.path.insert(0, str(p))
-        SRC_DIR = p
-        logger.info("Inserted src path into sys.path: %s", p)
-        break
-
-if SRC_DIR is None:
-    logger.warning("Could not find 'src' directory in candidate paths. Project models may not be available.")
-    # Initialize PROJECT_MODELS_AVAILABLE to False if src not found
+# Model Imports and Availability Check
+try:
+    from volatility_surface.models.mlp_model import MLPModel as ProjectMLPModel
+    from volatility_surface.models.random_forest import RandomForestVolatilityModel as ProjectRFModel
+    from volatility_surface.models.svr_model import SVRModel as ProjectSVRModel
+    from volatility_surface.models.xgboost_model import XGBVolatilityModel as ProjectXGBModel
+    # from volatility_surface.surface_generator import VolatilitySurfaceGenerator # Not used in this file
+    PROJECT_MODELS_AVAILABLE = True
+    logger.info("✓ Project models imported successfully")
+except Exception as e:
+    logger.error(f"Project model import failed: {e}")
     PROJECT_MODELS_AVAILABLE = False
-    _project_import_error = "SRC directory not found."
+    # Set project models to None if import fails
     ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
-else:
-    # Try to import project models (preferred)
-    PROJECT_MODELS_AVAILABLE = False
-    _project_import_error = None
-    try:
-        from volatility_surface.models.mlp_model import MLPModel as ProjectMLPModel
-        from volatility_surface.models.random_forest import RandomForestVolatilityModel as ProjectRFModel
-        # SVR model may not exist in all repos; guard import
-        try:
-            from volatility_surface.models.svr_model import SVRModel as ProjectSVRModel
-        except Exception:
-            ProjectSVRModel = None
-        # xgboost model filename may vary; try common variants
-        try:
-            from volatility_surface.models.xgboost_model import XGBVolatilityModel as ProjectXGBModel
-        except Exception:
-            try:
-                from volatility_surface.models.xgb_model import XGBVolatilityModel as ProjectXGBModel
-            except Exception:
-                ProjectXGBModel = None
 
-        PROJECT_MODELS_AVAILABLE = True
-        logger.info("Project models imported successfully.")
-    except Exception as e:
-        _project_import_error = str(e)
-        logger.warning("Project models not importable: %s", _project_import_error)
-        ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
-
-# ---------------------------
+# =============================
 # App constants & storage
-# ---------------------------
+# =============================
 APP_ROOT = Path(__file__).resolve().parent # Directory where this script (volatility_surface.py) resides
 # --- FIX: Change MODEL_DIR to your desired path ---
 # Go up from pages/ to streamlit_app/, then to the project root (OptionsLab), then to models/saved_models
@@ -128,9 +100,9 @@ FEATURE_COLUMNS = [
 TARGET_COLUMN = "implied_volatility"
 DEFAULT_SEED = 42
 
-# ---------------------------
+# =============================
 # Registry helpers
-# ---------------------------
+# =============================
 def load_registry() -> Dict[str, Any]:
     if REGISTRY_PATH.exists():
         try:
@@ -142,9 +114,9 @@ def load_registry() -> Dict[str, Any]:
 def save_registry(reg: Dict[str, Any]):
     REGISTRY_PATH.write_text(json.dumps(reg, indent=2, default=str))
 
-# ---------------------------
+# =============================
 # Estimator / Project-model factory
-# ---------------------------
+# =============================
 def create_model_instance(name: str, **kwargs):
     """
     Return either a project model instance if available (preferred),
@@ -187,9 +159,9 @@ def create_model_instance(name: str, **kwargs):
     # default fallback
     return RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=DEFAULT_SEED)
 
-# ---------------------------
+# =============================
 # Data generation & fallback prediction
-# ---------------------------
+# =============================
 def generate_fallback_data(n_samples: int = 1500, seed: int = DEFAULT_SEED) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     spots = rng.uniform(90, 110, n_samples)
@@ -218,9 +190,9 @@ def generate_fallback_prediction(df: pd.DataFrame) -> np.ndarray:
     smile = 0.03 * (m - 1.0) ** 2
     return np.clip(base + smile, 0.03, 0.6)
 
-# ---------------------------
+# =============================
 # Prediction wrapper
-# ---------------------------
+# =============================
 def safe_predict(model_obj, df: pd.DataFrame) -> np.ndarray:
     """
     Accept either a project-model instance (which may have predict_volatility/predict)
@@ -251,9 +223,9 @@ def safe_predict(model_obj, df: pd.DataFrame) -> np.ndarray:
     # fallback
     return generate_fallback_prediction(df)
 
-# ---------------------------
+# =============================
 # Model persistence helpers (support project model save/load if available)
-# ---------------------------
+# =============================
 def save_model_ui(name: str, model_obj: Any) -> Optional[str]:
     """
     Try to save using project's methods first (save / _save_model_impl / _save), else joblib.
@@ -336,9 +308,9 @@ def load_model_ui(name: str) -> Optional[Any]:
         logger.error("Failed to load model %s: %s", name, e)
     return None
 
-# ---------------------------
+# =============================
 # Grid builder & viz
-# ---------------------------
+# =============================
 def build_prediction_grid(m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40):
     m = np.linspace(m_start, m_end, m_steps)
     t = np.linspace(t_start, t_end, t_steps)
@@ -362,9 +334,9 @@ def fig_surface(M, T, Z, title="Volatility Surface"):
                       scene=dict(xaxis_title="Moneyness", yaxis_title="Time to Maturity", zaxis_title="Implied Vol"))
     return fig
 
-# ---------------------------
+# =============================
 # UI helpers
-# ---------------------------
+# =============================
 def setup_dark_theme():
     st.markdown("""
     <style>
@@ -377,9 +349,9 @@ def setup_dark_theme():
     </style>
     """, unsafe_allow_html=True)
 
-# ---------------------------
+# =============================
 # Main page
-# ---------------------------
+# =============================
 def main():
     st.set_page_config(page_title="Volatility Surface Explorer", layout="wide")
     setup_dark_theme()
@@ -395,12 +367,15 @@ def main():
     )
 
     # Status / debug: only show import details if models not present
-    # --- FIX: PROJECT_MODELS_AVAILABLE is now guaranteed to be defined ---
+    # PROJECT_MODELS_AVAILABLE is now guaranteed to be defined from the import section
     if not PROJECT_MODELS_AVAILABLE:
         with st.expander("Import diagnostics", expanded=False):
             st.write("Project models were not importable. Fallback to sklearn/XGBoost will be used.")
-            st.write("Import error:", _project_import_error)
-            st.write("Checked src path:", str(SRC_DIR) if SRC_DIR is not None else "no src path found")
+            # The specific error is logged, so we don't need to show it here unless needed.
+            st.write("Checked src path: Attempted standard paths from script location.")
+    else:
+        # Optional: Show success message if models were imported
+        st.success("Project models loaded successfully.")
 
     # Controls centered & full width
     st.markdown('<div class="center"><div class="controls">', unsafe_allow_html=True)
