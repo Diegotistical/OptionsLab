@@ -430,13 +430,32 @@ def main():
 
                             # If the model object is already a Pipeline (from a previous train),
                             # we just need a new estimator instance.
-                            # Note: Project models shouldn't be Pipelines initially, but check anyway.
                             if isinstance(model_obj, Pipeline):
                                 estimator = model_obj.named_steps['est']
                             else:
-                                estimator = model_obj
+                                # --- NEW FIX: Handle project models correctly ---
+                                # Project models often wrap an underlying sklearn estimator.
+                                # We need to extract that estimator for the pipeline.
+                                # Common attribute names for the underlying estimator in project models.
+                                estimator = getattr(model_obj, 'model', None) # e.g., MLPModel.model
+                                if estimator is None:
+                                    estimator = getattr(model_obj, 'estimator', None) # e.g., SVRModel.estimator
+                                if estimator is None:
+                                    # If no underlying sklearn estimator is found,
+                                    # assume the project model itself might implement fit/predict.
+                                    # This is less common but possible.
+                                    # However, sklearn Pipeline requires the last step to have 'fit'.
+                                    # If the project model doesn't, this will fail later in pipeline.fit().
+                                    # The safest fallback is to assume it *does* have sklearn interface here,
+                                    # or use the original sklearn fallback logic.
+                                    # Let's try the original sklearn fallback logic for robustness.
+                                    # If it's a project model, we assume it *should* behave like an estimator for this pipeline.
+                                    # If it doesn't, the pipeline will error, which is the desired outcome to catch the bug.
+                                    estimator = model_obj
+                                    logger.info(f"Using project model instance directly as estimator: {type(estimator)}")
 
                             # Build and fit the pipeline using the standard features
+                            # The scaler is applied first, then the estimator (which is now the underlying sklearn model or the project model itself if it's sklearn-compatible)
                             pipeline = Pipeline([("scaler", StandardScaler()), ("est", estimator)])
                             t0 = time.time()
                             # Use FEATURE_COLUMNS for the standard pipeline training
