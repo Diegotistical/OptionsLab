@@ -48,12 +48,14 @@ if not logger.handlers:
     logger.addHandler(h)
 
 # ---------------------------
-# Ensure src of project is importable (robust)
+# Ensure src of project is importable
 # ---------------------------
-# Candidate locations to find your project 'src' folder on Streamlit Cloud or local dev
+# The script is running from /path/to/streamlit_app/pages/volatility_surface.py
+# The src folder is at /path/to/src
+# So we need to go up from pages/ to streamlit_app/, then up again to the project root (where src is).
 CANDIDATE_SRC = [
-    Path(__file__).resolve().parent / ".." / "src",  # Go up from pages/ to streamlit_app/, then to src/
-    Path(__file__).resolve().parent.parent / "src", # Go up two levels from pages/ (e.g., if running from a deeper structure)
+    Path(__file__).resolve().parent.parent / "src", # Go up two levels from pages/ -> streamlit_app -> src/
+    Path(__file__).resolve().parent / ".." / "src",  # Go up from pages/ to streamlit_app/, then to src/ (this might also work depending on sys.path)
     Path.cwd() / "src",
     Path("src"),
     # Your machine path example (keeps safe if not present)
@@ -70,7 +72,7 @@ for p in CANDIDATE_SRC:
 
 if SRC_DIR is None:
     logger.warning("Could not find 'src' directory in candidate paths. Project models may not be available.")
-    # --- FIX: Initialize PROJECT_MODELS_AVAILABLE to False if src not found ---
+    # Initialize PROJECT_MODELS_AVAILABLE to False if src not found
     PROJECT_MODELS_AVAILABLE = False
     _project_import_error = "SRC directory not found."
     ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
@@ -101,7 +103,6 @@ else:
         _project_import_error = str(e)
         logger.warning("Project models not importable: %s", _project_import_error)
         ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
-
 
 # ---------------------------
 # App constants & storage
