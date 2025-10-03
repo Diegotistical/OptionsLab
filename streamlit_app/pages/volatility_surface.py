@@ -1,3 +1,4 @@
+
 import sys
 import os
 import json
@@ -121,6 +122,7 @@ def create_model_instance(name: str, **kwargs):
     """
     Return either a project model instance if available (preferred),
     or a sklearn/xgboost estimator instance as a fallback.
+    This is used for prediction and saving/loading.
     """
     lname = name.lower()
     # Try project models first
@@ -411,11 +413,11 @@ def main():
                 st.error("No training data. Generate or upload training data first.")
             else:
                 df = st.session_state["training_data"]
-                # instantiate
+                # instantiate (This might return a project model or a sklearn fallback)
                 try:
                     model_obj = create_model_instance(model_choice)
                     # Log which type of model object was created
-                    logger.info(f"Created model instance: {type(model_obj)}")
+                    logger.info(f"Created model instance for training: {type(model_obj)}")
                 except Exception as e:
                     st.error(f"Failed to create model instance: {e}")
                     model_obj = None
@@ -423,67 +425,36 @@ def main():
                 if model_obj is not None:
                     with st.spinner("Training model..."):
                         try:
-                            # --- FIX: Use a standardized training approach for ALL models ---
-                            # This bypasses the buggy `train` methods in the project models.
+                            # --- FIX: Use a standardized sklearn Pipeline approach for ALL models ---
+                            # This avoids issues with project models' internal training methods or sklearn compatibility.
+                            # We extract the *name* of the requested model type to choose the correct sklearn fallback estimator.
                             X = df.copy()
                             y = X[TARGET_COLUMN]
 
-                            # If the model object is already a Pipeline (from a previous train),
-                            # we just need a new estimator instance.
-                            if isinstance(model_obj, Pipeline):
-                                estimator = model_obj.named_steps['est']
-                            else:
-                                # --- NEWER FIX: Handle project models correctly, especially MLP ---
-                                # Project models often wrap an underlying sklearn estimator.
-                                # We need to extract that estimator for the pipeline.
-                                # Common attribute names for the underlying estimator in project models.
-                                estimator = getattr(model_obj, 'model', None) # e.g., MLPModel.model, RF.model, SVR.model
-                                if estimator is None:
-                                    estimator = getattr(model_obj, 'estimator', None) # e.g., SVRModel.estimator (if different)
-                                if estimator is None:
-                                    # If no underlying sklearn estimator is found,
-                                    # assume the project model itself might implement fit/predict.
-                                    # This is less common but possible.
-                                    # However, sklearn Pipeline requires the last step to have 'fit'.
-                                    # If the project model doesn't, this will fail later in pipeline.fit().
-                                    # The safest fallback is to assume it *does* have sklearn interface here,
-                                    # or use the original sklearn fallback logic.
-                                    # Let's try the original sklearn fallback logic for robustness.
-                                    # If it's a project model, we assume it *should* behave like an estimator for this pipeline.
-                                    # If it doesn't, the pipeline will error, which is the desired outcome to catch the bug.
-                                    estimator = model_obj
-                                    logger.info(f"Using project model instance directly as estimator: {type(estimator)}")
+                            # Determine the sklearn estimator based on the model_choice string
+                            # This ensures we always train with a known, working sklearn estimator.
+                            if "mlp" in model_choice.lower():
+                                estimator = MLPRegressor(
+                                    hidden_layer_sizes=(64, 64), # Use default or pass from UI if needed
+                                    max_iter=400,
+                                    early_stopping=True,
+                                    random_state=DEFAULT_SEED
+                                )
+                            elif "forest" in model_choice.lower() or "random" in model_choice.lower():
+                                estimator = RandomForestRegressor(n_estimators=200, n_jobs=-1, random_state=DEFAULT_SEED)
+                            elif "svr" in model_choice.lower():
+                                estimator = SVR(C=1.0, kernel="rbf")
+                            elif "xgboost" in model_choice.lower() or "xgb" in model_choice.lower():
+                                if XGBOOST_AVAILABLE:
+                                    estimator = XGBRegressor(n_estimators=200, objective="reg:squarederror", random_state=DEFAULT_SEED)
                                 else:
-                                    # Check if the extracted estimator is a PyTorch model (like Sequential for MLP)
-                                    # PyTorch models won't work in sklearn pipelines.
-                                    # We need to handle them differently.
-                                    import torch.nn
-                                    if isinstance(estimator, torch.nn.Module):
-                                        logger.info(f"Detected PyTorch model: {type(estimator)}. Using project model's own training.")
-                                        # --- Special case for PyTorch models like MLP ---
-                                        # Use the project model's internal training logic if available,
-                                        # or fall back to sklearn pipeline with a compatible estimator if possible.
-                                        # For now, let's assume the project model has its own fit/predict methods
-                                        # that handle the PyTorch model internally.
-                                        # The safest way might be to call the project model's train method if it exists and is fixed,
-                                        # or use a sklearn fallback for MLP.
-                                        # Since the logs show the internal train methods are buggy, let's force a sklearn fallback for MLP specifically.
-                                        # Identify if the original model_obj was an MLP type.
-                                        if isinstance(model_obj, ProjectMLPModel):
-                                            logger.info("MLP model detected, using sklearn MLPRegressor fallback.")
-                                            estimator = MLPRegressor(
-                                                hidden_layer_sizes=model_obj.config.get('hidden_sizes', (64, 64)),
-                                                max_iter=model_obj.config.get('max_iter', 400),
-                                                early_stopping=True,
-                                                random_state=DEFAULT_SEED
-                                            )
-                                        else:
-                                            # This shouldn't happen based on the error, but handle if another PyTorch model appears.
-                                            # For now, re-raise to indicate a problem if not MLP.
-                                            raise TypeError(f"PyTorch model {type(estimator)} not handled for sklearn pipeline in {type(model_obj)}")
+                                    logger.warning("XGBoost not available, falling back to RandomForest for training.")
+                                    estimator = RandomForestRegressor(n_estimators=200, n_jobs=-1, random_state=DEFAULT_SEED)
+                            else:
+                                # Default fallback
+                                estimator = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=DEFAULT_SEED)
 
-                            # Build and fit the pipeline using the standard features
-                            # The scaler is applied first, then the estimator (which is now sklearn-compatible)
+                            # Build and fit the pipeline using the chosen sklearn estimator
                             pipeline = Pipeline([("scaler", StandardScaler()), ("est", estimator)])
                             t0 = time.time()
                             # Use FEATURE_COLUMNS for the standard pipeline training
@@ -499,10 +470,10 @@ def main():
                                 "fit_time_seconds": t1 - t0
                             }
 
-                            # Store the trained pipeline as the model object
+                            # Store the trained sklearn pipeline as the model object for saving/prediction
                             model_obj = pipeline
                             history = None
-                            logger.info(f"Training finished using standardized pipeline for {type(estimator)}")
+                            logger.info(f"Training finished using standardized sklearn pipeline for {type(estimator)}")
                             # --- END OF FIX ---
 
                             # save in session
