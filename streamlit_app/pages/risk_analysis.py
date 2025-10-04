@@ -267,6 +267,88 @@ def fallback_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, n
         logger.error(f"Monte Carlo fallback failed: {str(e)}")
         return 0.0
 
+# --- NEW: Binomial Tree Fallback ---
+def fallback_binomial_tree(S, K, T, r, sigma, option_type="call", exercise_style="european", q=0.0, num_steps=500):
+    """Fallback implementation replicating the BinomialTree.price logic"""
+    try:
+        # --- Replicate validation logic ---
+        if not (isinstance(S, (int,float)) and isinstance(K, (int,float)) and isinstance(T, (int,float)) and
+                isinstance(r, (int,float)) and isinstance(sigma, (int,float)) and isinstance(q, (int,float))):
+            logger.error("Binomial Tree fallback: Inputs must be numeric.")
+            return 0.0
+        if S <= 0 or K <= 0:
+            logger.error("Binomial Tree fallback: Spot/strike must be positive.")
+            return 0.0
+        if T < 0 or sigma < 0 or q < 0:
+            logger.error("Binomial Tree fallback: T/sigma/q must be non-negative.")
+            return 0.0
+        if option_type not in {"call", "put"}:
+            logger.error("Binomial Tree fallback: option_type must be 'call' or 'put'.")
+            return 0.0
+        if exercise_style not in {"european", "american"}:
+            logger.error("Binomial Tree fallback: exercise_style must be 'european' or 'american'.")
+            return 0.0
+        if num_steps <= 0:
+            logger.error("Binomial Tree fallback: num_steps must be positive.")
+            return 0.0
+
+        # Handle edge cases
+        if T == 0:
+            if option_type == "call":
+                return float(max(S - K, 0.0))
+            else: # put
+                return float(max(K - S, 0.0))
+        if sigma == 0:
+            df = np.exp(-r * T)
+            fwd = S * np.exp((r - q) * T)
+            if option_type == "call":
+                intrinsic = max(fwd - K, 0.0)
+            else: # put
+                intrinsic = max(K - fwd, 0.0)
+            return float(intrinsic * df)
+
+        # --- Compute tree parameters ---
+        dt = T / num_steps
+        u = np.exp(sigma * np.sqrt(dt))
+        d = 1.0 / u
+        p = (np.exp((r-q)*dt) - d) / (u-d)
+        p = min(max(p, 0.0), 1.0)  # Clamp probability
+
+        # --- Build asset price tree ---
+        asset_prices = np.empty((num_steps + 1, num_steps + 1), dtype=np.float64)
+        for i in range(num_steps + 1):
+            j = np.arange(i + 1)
+            asset_prices[i, :i+1] = S * (u ** j) * (d ** (i - j))
+
+        # --- Backward induction ---
+        disc = np.exp(-r * dt)
+        option_values = np.empty_like(asset_prices)
+        
+        # Terminal payoffs
+        if option_type == "call":
+            option_values[-1, :num_steps+1] = np.maximum(asset_prices[-1, :num_steps+1] - K, 0)
+        else: # put
+            option_values[-1, :num_steps+1] = np.maximum(K - asset_prices[-1, :num_steps+1], 0)
+        
+        # Backward induction loop
+        for step in range(num_steps-1, -1, -1):
+            option_values[step, :step+1] = disc * (
+                p * option_values[step+1, 1:step+2] + 
+                (1 - p) * option_values[step+1, :step+1]
+            )
+            # American early exercise
+            if exercise_style == "american":
+                if option_type == "call":
+                    intrinsic = np.maximum(asset_prices[step, :step+1] - K, 0)
+                else: # put
+                    intrinsic = np.maximum(K - asset_prices[step, :step+1], 0)
+                option_values[step, :step+1] = np.maximum(option_values[step, :step+1], intrinsic)
+
+        return float(option_values[0,0])
+    except Exception as e:
+        logger.error(f"Binomial Tree fallback failed: {str(e)}")
+        return 0.0
+
 # ======================
 # PLOTTING FUNCTIONS
 # ======================
@@ -281,7 +363,7 @@ def create_option_pricing_chart(results: List[Dict]) -> go.Figure:
         fig.add_trace(go.Bar(
             x=[r['model'] for r in valid_results],
             y=[r['price'] for r in valid_results],
-            marker_color=['#3b82f6' if 'Black-Scholes' in r['model'] else '#10b981' for r in valid_results],
+            marker_color=['#3b82f6' if 'Black-Scholes' in r['model'] else '#10b981' if 'Binomial Tree' in r['model'] else '#ef4444' for r in valid_results], # Added color for Binomial Tree
             text=[f"${r['price']:.4f}" for r in valid_results],
             textposition='auto',
         ))
@@ -301,19 +383,20 @@ def create_performance_chart(results: List[Dict]) -> go.Figure:
     """Create performance comparison chart"""
     fig = go.Figure()
     
-    valid_results = [r for r in results if isinstance(r.get('time_ms'), (int, float)) and 'Prediction' in r['model']]
+    # Include all valid models for performance comparison, not just 'Prediction'
+    valid_results = [r for r in results if isinstance(r.get('time_ms'), (int, float))]
     
     if valid_results:
         fig.add_trace(go.Bar(
             x=[r['model'] for r in valid_results],
             y=[r['time_ms'] for r in valid_results],
-            marker_color='#8b5cf6',
+            marker_color=['#3b82f6' if 'Black-Scholes' in r['model'] else '#10b981' if 'Binomial Tree' in r['model'] else '#8b5cf6' for r in valid_results], # Added color for Binomial Tree
             text=[f"{r['time_ms']:.1f}ms" for r in valid_results],
             textposition='auto',
         ))
     
     fig.update_layout(
-        title="Model Performance (Prediction Time)",
+        title="Model Performance (Execution Time)",
         xaxis_title="Pricing Model",
         yaxis_title="Execution Time (ms)",
         template="plotly_dark",
@@ -405,6 +488,10 @@ if st.session_state.current_page == 'option_benchmark':
         include_mc_advanced = st.checkbox("Advanced MC", value=True)
     with col4:
         include_ml = st.checkbox("ML Pricing", value=True)
+    # --- ADD Binomial Tree Checkbox ---
+    with col1: # Can add to any column, using col1 here
+        include_bt = st.checkbox("Binomial Tree", value=True)
+    # --- END ADD ---
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Pricing parameters
@@ -448,6 +535,15 @@ if st.session_state.current_page == 'option_benchmark':
         with st.spinner("Running pricing benchmarks..."):
             results = []
             
+            # Get pricing models
+            try:
+                from src.pricing_models.binomial_tree import BinomialTree
+                binomial_model = BinomialTree(num_steps=500) # Using default steps as per original
+                logger.info("Successfully imported BinomialTree")
+            except ImportError as e:
+                logger.warning(f"BinomialTree import failed: {str(e)}")
+                binomial_model = None
+
             # Black-Scholes
             if include_bs:
                 price, latency = timeit_ms(fallback_black_scholes, S, K, T, r, sigma, option_type)
@@ -477,7 +573,31 @@ if st.session_state.current_page == 'option_benchmark':
                     "time_ms": latency,
                     "type": "Simulation"
                 })
-            
+
+            # --- NEW: Binomial Tree Benchmark ---
+            if include_bt:
+                try:
+                    if binomial_model is not None:
+                        price, latency = timeit_ms(
+                            binomial_model.price, S, K, T, r, sigma, option_type, "european", q=0.0
+                        )
+                    else:
+                        # Fallback implementation uses european by default
+                        price, latency = timeit_ms(
+                            fallback_binomial_tree, S, K, T, r, sigma, option_type, "european", q=0.0, num_steps=500 # Using default steps
+                        )
+                    results.append({
+                        "model": "Binomial Tree (Eur)",
+                        "price": price,
+                        "time_ms": latency,
+                        "type": "Lattice"
+                    })
+                except Exception as e:
+                    logger.error(f"Binomial Tree benchmark failed: {str(e)}")
+                    # Optionally add an error result, or just skip
+                    st.error(f"Binomial Tree benchmark failed: {str(e)}")
+            # --- END NEW ---
+
             # ML Pricing (simulated)
             if include_ml:
                 # Simulate ML pricing being faster but slightly different
