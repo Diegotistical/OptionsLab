@@ -35,7 +35,7 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
 ✅ **Extensible Architecture**
 - Plug in custom pricing models or risk engines
 
-✅ **Visualization (Planned)**
+✅ **Visualization**
 - Payoff diagrams
 - Volatility surfaces
 - Greeks heatmaps
@@ -44,38 +44,148 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
 
 ## 🏗️ Project Structure
 
-    OptionsLab/
-    ├── LICENSE
-    ├── README.md
-    ├── requirements.txt
-    └── src
-        ├── greeks/
-        │   ├── __init__.py
-        │   └── greeks.py
-        ├── pricing_models/
-        │   ├── __init__.py
-        │   ├── black_scholes.py
-        │   ├── binomial_tree.py
-        │   └── monte_carlo.py
-        ├── risk_analysis/
-        │   ├── __init__.py
-        │   └── var.py
-        volatility_surface/
-        ├── __init__.py
-        ├── base.py                     # VolatilityModelBase
-        ├── models/
-        │   ├── __init__.py
-        │   ├── svr_model.py            
-        │   ├── mlp_model.py        
-        │   ├── xgboost_model.py      
-        ├── utils/
-        │   ├── __init__.py
-        │   ├── feature_engineering.py  
-        │   ├── data_preprocessing.py  
-        │   ├── grid_search.py
-        │   ├── arbitrage.py
-        │   ├── arbitrage_utils.py
-        ├── surface_generator.py        
+    |   LICENSE
+    |   README.md
+    |   requirements.txt
+    |   runtime.txt
+    |   setup.py
+    |   
+    +---.devcontainer
+    |       devcontainer.json
+    |       
+    +---.github
+    |   \---workflows
+    |           ci.yml
+    |           
+    +---data
+    |   +---processed
+    |   |       .gitkeep
+    |   |       
+    |   \---raw
+    |           .gitkeep
+    |           
+    +---docs
+    |       .gitkeep
+    |       
+    +---models
+    |   +---my_models
+    |   +---saved_models
+    |   |       .gitkeep
+    |   |       
+    |   \---training_logs
+    |           .gitkeep
+    |           
+    +---notebooks
+    |       .gitkeep
+    |       backtesting.ipynb
+    |       binomial_tree.ipynb
+    |       exploratory_data_analysis.ipynb
+    |       learnings.ipynb
+    |       volatility_model_tuning.ipynb
+    |       
+    +---src
+    |   |   __init__.py
+    |   |   
+    |   +---common
+    |   |       config.py
+    |   |       helpers.py
+    |   |       logging_config.py
+    |   |       validation.py
+    |   |       __init__.py
+    |   |       
+    |   +---exceptions
+    |   |       data_exceptions.py
+    |   |       greek_exceptions.py
+    |   |       model_exceptions.py
+    |   |       montecarlo_exceptions.py
+    |   |       pricing_exceptions.py
+    |   |       risk_exceptions.py
+    |   |       __init__.py
+    |   |       
+    |   +---greeks
+    |   |       .gitkeep
+    |   |       greeks.py
+    |   |       
+    |   +---pricing_models
+    |   |       .gitkeep
+    |   |       binomial_tree.py
+    |   |       black_scholes.py
+    |   |       monte_carlo.py
+    |   |       monte_carlo_ml.py
+    |   |       monte_carlo_unified.py
+    |   |       __init__.py
+    |   |       
+    |   +---risk_analysis
+    |   |       .gitkeep
+    |   |       expected_shortfall.py
+    |   |       sensitivity_analysis.py
+    |   |       stress_testing.py
+    |   |       var.py
+    |   |       __init__.py
+    |   |       
+    |   +---utils
+    |   |   |   .gitkeep
+    |   |   |   utils.py
+    |   |   |   __init__.py
+    |   |   |   
+    |   |   \---decorators
+    |   |           caching.py
+    |   |           timing.py
+    |   |           __init__.py
+    |   |           
+    |   \---volatility_surface
+    |       |   .gitkeep
+    |       |   base.py
+    |       |   surface_generator.py
+    |       |   __init__.py
+    |       |   
+    |       +---common
+    |       |       validation.py
+    |       |       __init__.py
+    |       |       
+    |       +---models
+    |       |       mlp_model.py
+    |       |       random_forest.py
+    |       |       svr_model.py
+    |       |       xgboost_model.py
+    |       |       __init__.py
+    |       |       
+    |       \---utils
+    |               arbitrage.py
+    |               arbitrage_enforcement.py
+    |               arbitrage_utils.py
+    |               data_preprocessing.py
+    |               feature_engineering.py
+    |               grid_search.py
+    |               tensor_utils.py
+    |               __init__.py
+    |               
+    +---streamlit_app
+    |   |   app.py
+    |   |   st_utils.py
+    |   |   __init__.py
+    |   |   
+    |   \---pages
+    |           .gitkeep
+    |           1_MonteCarlo_Basic.py
+    |           2_MonteCarlo_ML.py
+    |           3_MonteCarlo_Unified.py
+    |           4_Binomial_Tree.py
+    |           benchmarks.py
+    |           risk_analysis.py
+    |           volatility_surface.py
+    |           __init__.py
+    |           
+    \---tests
+            .gitkeep
+            test_benchmarks.py
+            test_benchmarks2.py
+            test_black_scholes.py
+            test_models.py
+            test_monte_carlo.py
+            test_risk_analysis.py
+            test_var.py
+            test_vol_surface.py        
                 
 
 ---
@@ -131,23 +241,78 @@ Compute call and put prices using Black-Scholes:
 
 ---
 
-### Monte Carlo Simulation
+### MonteCarloPricer Tutorial
 
-Estimate an option price via Monte Carlo simulation:
+MonteCarloPricer is a Monte Carlo option pricer with Greeks computation and optional Numba acceleration. It allows you to price European options and compute Delta, Gamma, Vega, Theta, and Rho.
 
-    from src.simulation.monte_carlo import simulate_option_price
+# Monte Carlo Option Pricer Tutorial
 
-    price, stddev = simulate_option_price(
-        S0=100,
-        K=110,
-        T=1,
-        r=0.01,
-        sigma=0.2,
-        n_simulations=100_000,
-        option_type="call"
-    )
+This tutorial demonstrates how to use the `MonteCarloPricer` class to price European options and compute Greeks. Optional Numba acceleration is supported for faster simulations.
 
-    print(f"Estimated Call Price: {price:.4f} ± {stddev:.4f}")
+---
+
+## 1. Import the Pricer
+
+```bash
+from src.pricing_models.monte_carlo import MonteCarloPricer
+```
+
+---
+
+## 2. Initialize a Pricer
+
+```bash
+pricer = MonteCarloPricer(
+    num_simulations=100_000,
+    num_steps=100,
+    seed=42,
+    use_numba=False
+)
+```
+
+---
+
+## 3. Price a European Option
+
+```bash
+S, K, T, r, sigma, q = 100, 110, 1, 0.01, 0.2, 0.0
+
+call_price = pricer.price(S, K, T, r, sigma, option_type="call", q=q)
+put_price  = pricer.price(S, K, T, r, sigma, option_type="put", q=q)
+
+print(f"Call Price: {call_price:.4f}")
+print(f"Put Price: {put_price:.4f}")
+```
+
+---
+
+## 4. Compute Greeks
+
+```bash
+delta = pricer.delta(S, K, T, r, sigma, option_type="call")
+gamma = pricer.gamma(S, K, T, r, sigma, option_type="call")
+vega  = pricer.vega(S, K, T, r, sigma, option_type="call")
+theta = pricer.theta(S, K, T, r, sigma, option_type="call")
+rho   = pricer.rho(S, K, T, r, sigma, option_type="call")
+
+print(f"Delta: {delta:.4f}, Gamma: {gamma:.4f}, Vega: {vega:.4f}, Theta: {theta:.4f}, Rho: {rho:.4f}")
+```
+
+---
+
+## 5. Enable Numba Acceleration (Optional)
+
+```bash
+pricer_numba = MonteCarloPricer(
+    num_simulations=100_000,
+    num_steps=100,
+    use_numba=True
+)
+
+fast_price = pricer_numba.price(S, K, T, r, sigma, option_type="call")
+print(f"Call Price with Numba: {fast_price:.4f}")
+```
+
 
 ---
 
@@ -167,18 +332,6 @@ Compute option Greeks:
     )
 
     print(greeks)
-
----
-
-## 🛣️ Roadmap
-
-- [x] Black-Scholes pricing (European)
-- [x] Monte Carlo engine for European options
-- [x] Greeks calculation (analytical & numerical)
-- [x] Binomial Tree American options support
-- [x] Advanced risk metrics (VaR, CVaR)
-- [ ] Visualization: payoff diagrams, volatility surfaces
-- [ ] Market data integration (e.g. Yahoo Finance, Alpha Vantage)
 
 ---
 
@@ -207,6 +360,7 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
 
