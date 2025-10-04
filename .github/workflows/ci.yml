@@ -15,8 +15,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Clean any existing .egg-info directories
-      run: |
-        find . -name "*.egg-info" -exec rm -rf {} +
+      run: find . -name "*.egg-info" -exec rm -rf {} +
 
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
@@ -24,16 +23,27 @@ jobs:
         python-version: 3.11
 
     - name: Upgrade pip, setuptools, wheel
-      run: |
-        python -m pip install --upgrade pip setuptools wheel
+      run: python -m pip install --upgrade pip setuptools wheel
 
-    - name: Install editable package with compatibility flags
-      run: |
-        pip install -e . --use-pep517 --config-settings editable_mode=compat
+    - name: Install editable package
+      run: pip install -e . --use-pep517 --config-settings editable_mode=compat
 
-    - name: Install test dependencies
+    - name: Install test & lint dependencies
       run: |
         pip install -r requirements.txt
+        pip install black==24.* isort==5.* flake8==7.* flake8-bugbear==23.* mypy==1.* pytest==8.* pytest-cov nbval
+
+    - name: Run isort (check)
+      run: isort . --check-only
+
+    - name: Run Black (check)
+      run: black . --check
+
+    - name: Run Flake8
+      run: flake8 .
+
+    - name: Run Mypy
+      run: mypy .
 
     - name: Run tests with pytest
       run: |
