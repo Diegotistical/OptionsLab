@@ -201,7 +201,7 @@ The toolkit is designed to be modular and extensible, enabling you to integrate 
 
 Clone the repository:
 
-    git clone [https://github.com/Diegotistical/quant-options-toolkit.git](https://github.com/Diegotistical/OptionsLab.git)
+    git clone https://github.com/Diegotistical/OptionsLab.git
     cd OptionsLab
 
 *(Note: Ensure you fill in `requirements.txt` as you add dependencies.)*
@@ -360,6 +360,7 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
 
