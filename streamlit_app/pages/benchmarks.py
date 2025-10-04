@@ -6,7 +6,6 @@ import plotly.express as px
 import time
 import logging
 from typing import Dict, Any, Tuple, List, Optional
-
 # ======================
 # CONFIGURATION
 # ======================
@@ -17,12 +16,11 @@ if not logger.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-
 # ======================
 # IMPORT HANDLING
 # ======================
 def get_pricing_models():
-    """Robust import of all pricing models with fallback implementations"""
+    """Import of all pricing models with fallback implementations"""
     models = {}
     # Try to import Black-Scholes
     try:
@@ -32,7 +30,6 @@ def get_pricing_models():
     except ImportError as e:
         logger.warning(f"BlackScholesPricer import failed: {str(e)}")
         models["bs"] = None
-    
     # Try to import Monte Carlo
     try:
         from src.pricing_models.monte_carlo import MonteCarloPricer
@@ -41,7 +38,6 @@ def get_pricing_models():
     except ImportError as e:
         logger.warning(f"MonteCarloPricer import failed: {str(e)}")
         models["mc"] = None
-    
     # Try to import Monte Carlo Unified
     try:
         from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni
@@ -53,7 +49,6 @@ def get_pricing_models():
     except ImportError as e:
         logger.warning(f"MonteCarloPricerUni import failed: {str(e)}")
         models["mc_unified"] = None
-    
     # Try to import Monte Carlo ML
     try:
         from src.pricing_models.monte_carlo_ml import MonteCarloML
@@ -65,16 +60,21 @@ def get_pricing_models():
     except ImportError as e:
         logger.warning(f"MonteCarloML import failed: {str(e)}")
         models["mc_ml"] = None
-    
+    # Try to import Binomial Tree
+    try:
+        from src.pricing_models.binomial_tree import BinomialTree
+        models["bt"] = BinomialTree(num_steps=500) # Using default steps as per original
+        logger.info("Successfully imported BinomialTree")
+    except ImportError as e:
+        logger.warning(f"BinomialTree import failed: {str(e)}")
+        models["bt"] = None
     return models
-
 def timeit_ms(fn, *args, **kwargs) -> Tuple[Any, float]:
     """Measure execution time in milliseconds"""
     start = time.perf_counter()
     result = fn(*args, **kwargs)
     elapsed = (time.perf_counter() - start) * 1000.0
     return result, elapsed
-
 # ======================
 # FALLBACK IMPLEMENTATIONS
 # ======================
@@ -112,12 +112,10 @@ def fallback_monte_carlo(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000, n
             drift = (r - q - 0.5 * sigma ** 2) * dt
             diffusion = sigma * np.sqrt(dt) * Z[:, t]
             S_paths[:, t] = S_paths[:, t-1] * np.exp(drift + diffusion)
-        
         if option_type == "call":
             payoff = np.maximum(S_paths[:, -1] - K, 0.0)
         else:
             payoff = np.maximum(K - S_paths[:, -1], 0.0)
-        
         return float(np.mean(np.exp(-r * T) * payoff))
     except Exception as e:
         logger.error(f"Monte Carlo fallback failed: {str(e)}")
@@ -146,6 +144,89 @@ def fallback_monte_carlo_ml(S, K, T, r, sigma, option_type, q=0.0, num_sim=50000
     except Exception as e:
         logger.error(f"ML Monte Carlo fallback failed: {str(e)}")
         return 0.0
+
+# --- NEW FALLBACK FOR BINOMIAL TREE ---
+def fallback_binomial_tree(S, K, T, r, sigma, option_type="call", exercise_style="european", q=0.0, num_steps=500):
+    """Fallback implementation replicating the BinomialTree.price logic"""
+    try:
+        # --- Replicate validation logic ---
+        if not (isinstance(S, (int,float)) and isinstance(K, (int,float)) and isinstance(T, (int,float)) and
+                isinstance(r, (int,float)) and isinstance(sigma, (int,float)) and isinstance(q, (int,float))):
+            logger.error("Binomial Tree fallback: Inputs must be numeric.")
+            return 0.0
+        if S <= 0 or K <= 0:
+            logger.error("Binomial Tree fallback: Spot/strike must be positive.")
+            return 0.0
+        if T < 0 or sigma < 0 or q < 0:
+            logger.error("Binomial Tree fallback: T/sigma/q must be non-negative.")
+            return 0.0
+        if option_type not in {"call", "put"}:
+            logger.error("Binomial Tree fallback: option_type must be 'call' or 'put'.")
+            return 0.0
+        if exercise_style not in {"european", "american"}:
+            logger.error("Binomial Tree fallback: exercise_style must be 'european' or 'american'.")
+            return 0.0
+        if num_steps <= 0:
+            logger.error("Binomial Tree fallback: num_steps must be positive.")
+            return 0.0
+
+        # Handle edge cases
+        if T == 0:
+            if option_type == "call":
+                return float(max(S - K, 0.0))
+            else: # put
+                return float(max(K - S, 0.0))
+        if sigma == 0:
+            df = np.exp(-r * T)
+            fwd = S * np.exp((r - q) * T)
+            if option_type == "call":
+                intrinsic = max(fwd - K, 0.0)
+            else: # put
+                intrinsic = max(K - fwd, 0.0)
+            return float(intrinsic * df)
+
+        # --- Compute tree parameters ---
+        dt = T / num_steps
+        u = np.exp(sigma * np.sqrt(dt))
+        d = 1.0 / u
+        p = (np.exp((r-q)*dt) - d) / (u-d)
+        p = min(max(p, 0.0), 1.0)  # Clamp probability
+
+        # --- Build asset price tree ---
+        asset_prices = np.empty((num_steps + 1, num_steps + 1), dtype=np.float64)
+        for i in range(num_steps + 1):
+            j = np.arange(i + 1)
+            asset_prices[i, :i+1] = S * (u ** j) * (d ** (i - j))
+
+        # --- Backward induction ---
+        disc = np.exp(-r * dt)
+        option_values = np.empty_like(asset_prices)
+        
+        # Terminal payoffs
+        if option_type == "call":
+            option_values[-1, :num_steps+1] = np.maximum(asset_prices[-1, :num_steps+1] - K, 0)
+        else: # put
+            option_values[-1, :num_steps+1] = np.maximum(K - asset_prices[-1, :num_steps+1], 0)
+        
+        # Backward induction loop
+        for step in range(num_steps-1, -1, -1):
+            option_values[step, :step+1] = disc * (
+                p * option_values[step+1, 1:step+2] + 
+                (1 - p) * option_values[step+1, :step+1]
+            )
+            # American early exercise
+            if exercise_style == "american":
+                if option_type == "call":
+                    intrinsic = np.maximum(asset_prices[step, :step+1] - K, 0)
+                else: # put
+                    intrinsic = np.maximum(K - asset_prices[step, :step+1], 0)
+                option_values[step, :step+1] = np.maximum(option_values[step, :step+1], intrinsic)
+
+        return float(option_values[0,0])
+    except Exception as e:
+        logger.error(f"Binomial Tree fallback failed: {str(e)}")
+        return 0.0
+# --- END NEW FALLBACK ---
 
 # ======================
 # STYLING
@@ -492,13 +573,11 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
 # ======================
 # PAGE CONTENT
 # ======================
 st.markdown('<h1 class="main-header">Option Pricing Model Benchmark</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Comprehensive performance comparison of leading option pricing methodologies</p>', unsafe_allow_html=True)
-
 # Model selection
 st.markdown('<div style="background-color: #1e293b; padding: 1rem; border-radius: 8px; border: 1px solid #334155; margin-bottom: 1.5rem;">', unsafe_allow_html=True)
 st.markdown('<div class="engine-label" style="margin-bottom: 0.5rem;">Select Models to Compare</div>', unsafe_allow_html=True)
@@ -511,8 +590,11 @@ with col3:
     include_mc_unified = st.checkbox("Monte Carlo Unified", value=True, key="include_mc_unified")
 with col4:
     include_mc_ml = st.checkbox("Monte Carlo ML", value=True, key="include_mc_ml")
+# --- ADD Binomial Tree Checkbox ---
+with col1: # Can add to any column, using col1 here
+    include_bt = st.checkbox("Binomial Tree", value=True, key="include_bt")
+# --- END ADD ---
 st.markdown('</div>', unsafe_allow_html=True)
-
 # Input section
 st.markdown('<h3 class="subsection-header">Pricing Parameters</h3>', unsafe_allow_html=True)
 col1, col2 = st.columns([1, 1], gap="medium")
@@ -521,38 +603,31 @@ with col1:
     st.markdown('<div class="engine-label">Spot Price (S)</div>', unsafe_allow_html=True)
     S = st.number_input("", 1.0, 1_000.0, 100.0, key="spot_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-    
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Strike Price (K)</div>', unsafe_allow_html=True)
     K = st.number_input("", 1.0, 1_000.0, 100.0, key="strike_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-    
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Maturity (T, years)</div>', unsafe_allow_html=True)
     T = st.number_input("", 0.01, 5.0, 1.0, key="maturity_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-
 with col2:
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Risk-free Rate (r)</div>', unsafe_allow_html=True)
     r = st.number_input("", 0.0, 0.25, 0.05, key="riskfree_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-    
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Dividend Yield (q)</div>', unsafe_allow_html=True)
     q = st.number_input("", 0.0, 0.2, 0.0, key="dividend_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-    
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Volatility (σ)</div>', unsafe_allow_html=True)
     sigma = st.number_input("", 0.001, 2.0, 0.2, key="volatility_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-    
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Option Type</div>', unsafe_allow_html=True)
     option_type = st.selectbox("", ["call", "put"], key="option_type_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-
 # Configuration section
 st.markdown('<h3 class="subsection-header">Model Configuration</h3>', unsafe_allow_html=True)
 col1, col2, col3 = st.columns([1, 1, 1])
@@ -561,37 +636,30 @@ with col1:
     st.markdown('<div class="engine-label">Monte Carlo Simulations</div>', unsafe_allow_html=True)
     num_sim = st.slider("", 10_000, 200_000, 50_000, step=10_000, key="sim_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-
 with col2:
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Time Steps</div>', unsafe_allow_html=True)
     num_steps = st.slider("", 10, 500, 100, step=10, key="steps_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-
 with col3:
     st.markdown('<div class="engine-option" style="margin-bottom: 0.75rem;">', unsafe_allow_html=True)
     st.markdown('<div class="engine-label">Random Seed</div>', unsafe_allow_html=True)
     seed = st.number_input("", value=42, min_value=1, key="seed_bench")
     st.markdown('</div>', unsafe_allow_html=True)
-
 # Run button centered - FIXED: Full width button
 st.markdown('<div style="display: flex; justify-content: center; margin: 1.5rem 0; width: 100%;">', unsafe_allow_html=True)
 run = st.button("Run Benchmarks", type="primary", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
-
 # Main application logic
 if run:
     try:
         # Initialize progress indicators
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
         # Get pricing models
         status_text.text("Initializing pricing models...")
         progress_bar.progress(10)
-        
         models = get_pricing_models()
-        
         # Validate parameters - ENHANCED VALIDATION WITH BETTER ERROR HANDLING
         validation_errors = []
         if S <= 0:
@@ -606,18 +674,15 @@ if run:
             validation_errors.append("Risk-free rate (r) cannot be negative")
         if q < 0:
             validation_errors.append("Dividend yield (q) cannot be negative")
-        
         if validation_errors:
             st.error("Parameter validation failed:")
             for error in validation_errors:
                 st.error(f"• {error}")
             st.stop()
-        
         # Run benchmarks
         results = []
         reference_price = None
         price_errors = {}
-        
         # Black-Scholes Benchmark
         if include_bs:
             status_text.text("Running Black-Scholes benchmark...")
@@ -648,11 +713,10 @@ if run:
                     "type": "Analytical",
                     "description": "Closed-form solution"
                 })
-        
         # Monte Carlo Benchmark
         if include_mc:
             status_text.text("Running Monte Carlo benchmark...")
-            progress_bar.progress(40)
+            progress_bar.progress(30) # Updated progress
             try:
                 if models["mc"] is not None:
                     price, latency = timeit_ms(
@@ -681,11 +745,10 @@ if run:
                     "type": "Simulation",
                     "description": "Standard Monte Carlo"
                 })
-        
         # Monte Carlo Unified Benchmark
         if include_mc_unified:
             status_text.text("Running Monte Carlo Unified benchmark...")
-            progress_bar.progress(60)
+            progress_bar.progress(40) # Updated progress
             try:
                 if models["mc_unified"] is not None:
                     price, latency = timeit_ms(
@@ -714,11 +777,10 @@ if run:
                     "type": "Simulation",
                     "description": "Unified CPU/GPU with variance reduction"
                 })
-        
         # Monte Carlo ML Benchmark
         if include_mc_ml:
             status_text.text("Running Monte Carlo ML benchmark...")
-            progress_bar.progress(80)
+            progress_bar.progress(50) # Updated progress
             try:
                 if models["mc_ml"] is not None:
                     # First, train the model (one-time cost)
@@ -734,10 +796,8 @@ if run:
                         "sigma": np.full(Sg.size, sigma),
                         "q": np.full(Sg.size, q)
                     })
-                    
                     # Fit the model
                     _, t_fit_ms = timeit_ms(models["mc_ml"].fit, df)
-                    
                     # Predict our single point
                     x_single = pd.DataFrame([{
                         "S": S, "K": K, "T": T, "r": r, "sigma": sigma, "q": q
@@ -753,7 +813,6 @@ if run:
                     )
                     t_fit_ms = 0
                     t_pred_ms = latency
-                
                 # Add ML results with separate training and prediction times
                 results.append({
                     "model": "Monte Carlo ML (Training)",
@@ -787,32 +846,62 @@ if run:
                     "type": "ML Prediction",
                     "description": "Fast prediction after training"
                 })
-        
+
+        # --- NEW: Binomial Tree Benchmark ---
+        if include_bt:
+            status_text.text("Running Binomial Tree benchmark...")
+            progress_bar.progress(60) # Updated progress
+            try:
+                if models["bt"] is not None:
+                    price, latency = timeit_ms(
+                        models["bt"].price, S, K, T, r, sigma, option_type, "european", q
+                    )
+                else:
+                    # Fallback implementation uses european by default
+                    price, latency = timeit_ms(
+                        fallback_binomial_tree, S, K, T, r, sigma, option_type, "european", q, num_steps
+                    )
+                results.append({
+                    "model": f"Binomial Tree ({num_steps} steps)",
+                    "price": price,
+                    "time_ms": latency,
+                    "type": "Lattice",
+                    "description": "CRR Binomial Tree (European)"
+                })
+                if reference_price is not None and price != "Error":
+                     # Note: Comparing to BS reference, might not be ideal if BS assumptions differ significantly
+                    price_errors["Binomial Tree"] = abs(price - reference_price)
+            except Exception as e:
+                logger.error(f"Binomial Tree benchmark failed: {str(e)}")
+                results.append({
+                    "model": f"Binomial Tree ({num_steps} steps)",
+                    "price": "Error",
+                    "time_ms": "—",
+                    "type": "Lattice",
+                    "description": "CRR Binomial Tree (European)"
+                })
+        # --- END NEW ---
+
         # Final progress update
         progress_bar.progress(100)
         time.sleep(0.2)
         status_text.empty()
         progress_bar.empty()
-        
         # Process results for display
         display_data = []
         for result in results:
             model = result["model"]
             price = result["price"]
             time_ms = result["time_ms"]
-            
             # Format price
             price_str = f"${price:.6f}" if isinstance(price, (int, float)) else price
-            
             # Format time
             time_str = f"{time_ms:.2f} ms" if isinstance(time_ms, (int, float)) else time_ms
-            
             # Get error if available
             error_str = "—"
             model_key = model.split(' ')[0] if ' ' in model else model
             if model_key in price_errors:
                 error_str = f"{price_errors[model_key]:.6f}"
-            
             display_data.append({
                 "Pricing Model": model,
                 "Type": result["type"],
@@ -821,14 +910,11 @@ if run:
                 "Price Error": error_str,
                 "Description": result["description"]
             })
-        
         # Create DataFrame for display
         df = pd.DataFrame(display_data)
-        
         # Display results
         st.markdown('<h2 class="chart-title">Pricing Performance Comparison</h2>', unsafe_allow_html=True)
         st.markdown('<p class="chart-description">Benchmark results for the specified option parameters</p>', unsafe_allow_html=True)
-        
         st.dataframe(
             df,
             column_config={
@@ -861,7 +947,6 @@ if run:
             use_container_width=True,
             height=240
         )
-        
         # Add explanation about MC ML timing
         st.markdown('<div class="explanation-box">', unsafe_allow_html=True)
         st.markdown("""
@@ -877,7 +962,6 @@ if run:
         </p>
         """, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-        
         # Create visualization tabs
         tab1, tab2, tab3, tab4 = st.tabs([
             "Model Comparison", 
@@ -885,12 +969,10 @@ if run:
             "Accuracy Assessment",
             "Executive Summary"
         ])
-        
         # Model Comparison tab
         with tab1:
             st.markdown('<h2 class="chart-title">Model Comparison</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Visual comparison of pricing models across key metrics</p>', unsafe_allow_html=True)
-            
             # Filter out models with errors
             valid_results = [r for r in results if isinstance(r["price"], (int, float))]
             if valid_results:
@@ -899,17 +981,15 @@ if run:
                 with col1:
                     # Price comparison chart
                     fig_price = go.Figure()
-                    
                     # Add price points (exclude training phases)
                     price_results = [r for r in valid_results if "Training" not in r["model"]]
                     if price_results:
                         fig_price.add_trace(go.Bar(
                             x=[r["model"] for r in price_results],
                             y=[r["price"] for r in price_results],
-                            marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#10b981' for r in price_results],
+                            marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#10b981' if "Binomial Tree" in r["model"] else '#8b5cf6' if "Unified" in r["model"] else '#ef4444' for r in price_results], # Added color for Binomial Tree
                             width=0.6
                         ))
-                        
                         # Add reference line if Black-Scholes is available
                         if reference_price is not None:
                             fig_price.add_shape(
@@ -919,7 +999,6 @@ if run:
                                 line=dict(color="#f87171", width=2, dash="dash"),
                                 name="Black-Scholes Reference"
                             )
-                        
                         fig_price.update_layout(
                             title="Option Price Comparison",
                             xaxis_title="",
@@ -935,17 +1014,16 @@ if run:
                         st.plotly_chart(fig_price, use_container_width=True)
                     else:
                         st.info("No valid price data available for comparison")
-                
                 with col2:
                     # Time comparison chart - show only prediction times
-                    pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"])]
+                    pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"]) or "Binomial Tree" in r["model"]] # Added Binomial Tree
                     pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
                     if pred_results:
                         fig_time = go.Figure()
                         fig_time.add_trace(go.Bar(
                             x=[r["model"] for r in pred_results],
                             y=[r["time_ms"] for r in pred_results],
-                            marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#8b5cf6' if "Prediction" in r["model"] else '#ef4444' for r in pred_results],
+                            marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#10b981' if "Binomial Tree" in r["model"] else '#8b5cf6' if "Prediction" in r["model"] else '#ef4444' for r in pred_results], # Added color for Binomial Tree
                             width=0.6
                         ))
                         fig_time.update_layout(
@@ -966,14 +1044,12 @@ if run:
                         st.info("No valid execution time data available for comparison")
             else:
                 st.warning("No valid pricing results available for comparison")
-        
         # Performance Analysis tab
         with tab2:
             st.markdown('<h2 class="chart-title">Performance Analysis</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Detailed analysis of computational efficiency</p>', unsafe_allow_html=True)
-            
             # Filter valid time results for prediction phase
-            pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"])]
+            pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"]) or "Binomial Tree" in r["model"]] # Added Binomial Tree
             pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
             if pred_results:
                 # Create performance metrics - FIXED: Ensure no division by zero
@@ -983,20 +1059,16 @@ if run:
                     max_time = max(valid_times)
                 else:
                     min_time = max_time = 0
-                
                 bs_time = next((r["time_ms"] for r in pred_results if "Black-Scholes" in r["model"]), None)
-                
                 # Speedup calculations - FIXED: Prevent division by zero
                 speedups = {}
                 if bs_time is not None and bs_time > 0:
                     for r in pred_results:
                         if "Black-Scholes" not in r["model"] and r["time_ms"] > 0:
                             speedups[r["model"]] = bs_time / r["time_ms"]
-                
                 # Create performance metrics
                 st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
                 st.markdown('<div class="executive-summary-title">Performance Metrics</div>', unsafe_allow_html=True)
-                
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
@@ -1009,7 +1081,6 @@ if run:
                         st.markdown('<div class="executive-value">N/A</div>', unsafe_allow_html=True)
                         st.markdown('<div class="executive-help">No valid timing data</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
-                
                 with col2:
                     st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-title">Slowest Model</div>', unsafe_allow_html=True)
@@ -1021,7 +1092,6 @@ if run:
                         st.markdown('<div class="executive-value">N/A</div>', unsafe_allow_html=True)
                         st.markdown('<div class="executive-help">No valid timing data</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
-                
                 with col3:
                     if speedups:
                         st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
@@ -1036,30 +1106,24 @@ if run:
                         st.markdown('<div class="executive-value">N/A</div>', unsafe_allow_html=True)
                         st.markdown('<div class="executive-help">Black-Scholes not available for comparison</div>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-                
                 st.markdown('</div>', unsafe_allow_html=True)
-                
                 # Performance breakdown
                 st.markdown('<h3 class="subsection-header">Performance Breakdown</h3>', unsafe_allow_html=True)
-                
                 # Create model cards
                 for r in pred_results:
                     st.markdown('<div class="model-card">', unsafe_allow_html=True)
                     st.markdown(f'<div class="model-name">{r["model"]}</div>', unsafe_allow_html=True)
-                    
                     # Time comparison
                     st.markdown('<div class="model-detail">', unsafe_allow_html=True)
                     st.markdown('<span>Execution Time</span>', unsafe_allow_html=True)
                     st.markdown(f'<span class="model-value">{r["time_ms"]:.2f} ms</span>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
-                    
                     # Relative performance - FIXED: Prevent division by zero
                     if min_time > 0 and r["time_ms"] > 0:
                         st.markdown('<div class="model-detail">', unsafe_allow_html=True)
                         st.markdown('<span>Relative to Fastest</span>', unsafe_allow_html=True)
                         st.markdown(f'<span class="model-value">{r["time_ms"]/min_time:.1f}x</span>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
                     # Speedup vs Black-Scholes - FIXED: Prevent division by zero
                     if bs_time is not None and bs_time > 0 and "Black-Scholes" not in r["model"] and r["time_ms"] > 0:
                         speedup = bs_time / r["time_ms"]
@@ -1067,18 +1131,15 @@ if run:
                         st.markdown('<span>Speedup vs Black-Scholes</span>', unsafe_allow_html=True)
                         st.markdown(f'<span class="model-value">{speedup:.1f}x</span>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
                     st.markdown('</div>', unsafe_allow_html=True)
-                
                 # Performance chart
                 st.markdown('<h3 class="subsection-header">Time Distribution</h3>', unsafe_allow_html=True)
                 fig_perf = go.Figure()
-                
                 # Add performance bars
                 fig_perf.add_trace(go.Bar(
                     x=[r["model"] for r in pred_results],
                     y=[r["time_ms"] for r in pred_results],
-                    marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#8b5cf6' if "Prediction" in r["model"] else '#ef4444' for r in pred_results],
+                    marker_color=['#3b82f6' if "Black-Scholes" in r["model"] else '#10b981' if "Binomial Tree" in r["model"] else '#8b5cf6' if "Prediction" in r["model"] else '#ef4444' for r in pred_results], # Added color for Binomial Tree
                     width=0.6
                 ))
                 fig_perf.update_layout(
@@ -1095,18 +1156,15 @@ if run:
                     yaxis_type="log"
                 )
                 st.plotly_chart(fig_perf, use_container_width=True)
-                
                 # Performance insights
                 st.markdown('<h3 class="subsection-header">Performance Insights</h3>', unsafe_allow_html=True)
                 st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
                 st.markdown('<div class="executive-summary-text">', unsafe_allow_html=True)
-                
                 if speedups:
                     best_speedup_model = max(speedups.items(), key=lambda x: x[1])
                     st.markdown(f'<p>The <span class="highlight">{best_speedup_model[0]}</span> model provides the best performance advantage, '
                                f'running <span class="highlight">{best_speedup_model[1]:.1f}x</span> faster than the analytical Black-Scholes solution.</p>', 
                                unsafe_allow_html=True)
-                
                 if len(pred_results) > 1 and min_time > 0:
                     fastest = min(pred_results, key=lambda x: x["time_ms"])
                     slowest = max(pred_results, key=lambda x: x["time_ms"])
@@ -1115,23 +1173,19 @@ if run:
                                    f'<span class="highlight">{slowest["time_ms"]/fastest["time_ms"]:.1f}x</span> faster '
                                    f'than the slowest model (<span class="highlight">{slowest["model"]}</span>).</p>', 
                                    unsafe_allow_html=True)
-                
                 st.markdown('<p>For production environments requiring high-frequency pricing, '
                            'the Monte Carlo ML approach provides near-instant predictions after an initial training phase, '
                            'making it ideal for real-time risk management applications. The one-time training cost is quickly '
                            'amortized when pricing thousands of options.</p>', 
                            unsafe_allow_html=True)
-                
                 st.markdown('</div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
                 st.warning("No valid execution time data available for performance analysis")
-        
         # Accuracy Assessment tab
         with tab3:
             st.markdown('<h2 class="chart-title">Accuracy Assessment</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Evaluation of pricing accuracy relative to analytical solution</p>', unsafe_allow_html=True)
-            
             # Filter valid price results with reference
             valid_results = [r for r in results if isinstance(r["price"], (int, float)) and reference_price is not None]
             valid_results = [r for r in valid_results if "Training" not in r["model"]]
@@ -1142,18 +1196,15 @@ if run:
                     if "Black-Scholes" not in r["model"] and reference_price != 0:
                         error = abs(r["price"] - reference_price)
                         errors.append((r["model"], error))
-                
                 if errors:
                     # Create accuracy metrics - FIXED: Prevent division by zero
                     min_error_val = min(errors, key=lambda x: x[1])[1]
                     # Ensure we don't divide by zero or very small numbers
                     min_error_val = max(min_error_val, 1e-10)
                     error_ratio = max(errors, key=lambda x: x[1])[1] / min_error_val
-                    
                     # Create accuracy metrics
                     st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-summary-title">Accuracy Metrics</div>', unsafe_allow_html=True)
-                    
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
@@ -1162,7 +1213,6 @@ if run:
                         st.markdown(f'<div class="executive-value">{most_accurate[0]}</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="executive-help">Error: {most_accurate[1]:.6f}</div>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
                     with col2:
                         st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                         st.markdown('<div class="executive-title">Least Accurate</div>', unsafe_allow_html=True)
@@ -1170,20 +1220,16 @@ if run:
                         st.markdown(f'<div class="executive-value">{least_accurate[0]}</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="executive-help">Error: {least_accurate[1]:.6f}</div>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
                     with col3:
                         st.markdown('<div class="executive-insight">', unsafe_allow_html=True)
                         st.markdown('<div class="executive-title">Max Error Ratio</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="executive-value">{error_ratio:.1f}x</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="executive-help">Least vs most accurate</div>', unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
                     st.markdown('</div>', unsafe_allow_html=True)
-                    
                     # Accuracy chart
                     st.markdown('<h3 class="subsection-header">Price Error Comparison</h3>', unsafe_allow_html=True)
                     fig_error = go.Figure()
-                    
                     # Add error bars
                     fig_error.add_trace(go.Bar(
                         x=[e[0] for e in errors],
@@ -1204,7 +1250,6 @@ if run:
                         margin=dict(l=40, r=40, t=40, b=40)
                     )
                     st.plotly_chart(fig_error, use_container_width=True)
-                    
                     # Error distribution
                     st.markdown('<h3 class="subsection-header">Error Distribution</h3>', unsafe_allow_html=True)
                     # Create error distribution chart
@@ -1233,47 +1278,39 @@ if run:
                         font=dict(size=12, color='#e2e8f0')
                     )
                     st.plotly_chart(fig_error_dist, use_container_width=True)
-                    
                     # Accuracy insights
                     st.markdown('<h3 class="subsection-header">Accuracy Insights</h3>', unsafe_allow_html=True)
                     st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
                     st.markdown('<div class="executive-summary-text">', unsafe_allow_html=True)
-                    
                     most_accurate = min(errors, key=lambda x: x[1])
                     st.markdown(f'<p>The <span class="highlight">{most_accurate[0]}</span> model demonstrates the highest pricing accuracy, '
                                f'with an absolute error of <span class="highlight">{most_accurate[1]:.6f}</span> compared to the analytical solution.</p>', 
                                unsafe_allow_html=True)
-                    
                     st.markdown('<p>For applications requiring high precision, such as exotic option pricing or '
                                'risk management in volatile markets, the Monte Carlo Unified approach with variance reduction '
                                'techniques provides the best balance of accuracy and computational efficiency.</p>', 
                                unsafe_allow_html=True)
-                    
                     st.markdown('<p>The Monte Carlo ML model, while extremely fast for prediction, maintains reasonable accuracy '
                                'due to its training on high-quality Monte Carlo simulations, making it ideal for '
                                'applications where speed is critical and minor precision trade-offs are acceptable.</p>', 
                                unsafe_allow_html=True)
-                    
                     st.markdown('</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                 else:
                     st.warning("No valid price error data available for comparison")
             else:
                 st.warning("No valid price data available for accuracy assessment")
-        
         # Executive Summary tab
         with tab4:
             st.markdown('<h2 class="chart-title">Executive Summary</h2>', unsafe_allow_html=True)
             st.markdown('<p class="chart-description">Strategic insights for model selection based on business requirements</p>', unsafe_allow_html=True)
-            
             st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
             st.markdown('<div class="executive-summary-title">Strategic Recommendations</div>', unsafe_allow_html=True)
             st.markdown('<div class="executive-summary-text">', unsafe_allow_html=True)
-            
             # Generate strategic insights based on results
             if len(results) > 0:
                 # Identify fastest model (excluding Black-Scholes if present)
-                pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"])]
+                pred_results = [r for r in results if "Prediction" in r["model"] or "Black-Scholes" in r["model"] or ("Monte Carlo" in r["model"] and "Training" not in r["model"]) or "Binomial Tree" in r["model"]] # Added Binomial Tree
                 pred_results = [r for r in pred_results if isinstance(r["time_ms"], (int, float))]
                 if pred_results:
                     fastest = min(pred_results, key=lambda x: x["time_ms"])
@@ -1282,7 +1319,6 @@ if run:
                                f'provides the fastest execution at <span class="highlight">{fastest["time_ms"]:.2f} ms</span> per option. '
                                f'This makes it ideal for high-frequency trading systems and real-time risk monitoring.</p>', 
                                unsafe_allow_html=True)
-                
                 # Identify most accurate model
                 valid_results = [r for r in results if isinstance(r["price"], (int, float)) and reference_price is not None]
                 valid_results = [r for r in valid_results if "Training" not in r["model"]]
@@ -1296,7 +1332,6 @@ if run:
                                    f'This model is recommended for valuation-sensitive applications where small pricing errors '
                                    f'could lead to significant financial impact.</p>', 
                                    unsafe_allow_html=True)
-                
                 # ML-specific insight
                 mc_ml_result = next((r for r in results if "Monte Carlo ML (Prediction)" in r["model"]), None)
                 if mc_ml_result and isinstance(mc_ml_result["price"], (int, float)) and reference_price is not None:
@@ -1308,19 +1343,15 @@ if run:
                                f'thousands of options per second, making it ideal for scenario analysis, stress testing, '
                                f'and real-time risk management.</p>', 
                                unsafe_allow_html=True)
-            
             # General recommendation
             st.markdown('<p><span class="highlight">Strategic Recommendation:</span> Implement a hybrid approach where '
                        'the Monte Carlo ML model handles the majority of pricing requests for speed, while the more '
-                       'computationally intensive methods are reserved for validation, calibration, and high-precision '
+                       'computationally intensive methods like Monte Carlo Unified or Binomial Tree are reserved for validation, calibration, and high-precision '
                        'requirements. This provides the best balance of performance and accuracy across different business needs.</p>', 
                        unsafe_allow_html=True)
-            
             st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
-            
             st.markdown('<h3 class="subsection-header">Model Selection Guide</h3>', unsafe_allow_html=True)
-            
             # Create model selection guide
             model_guide = [
                 {
@@ -1330,8 +1361,8 @@ if run:
                 },
                 {
                     "Use Case": "Regulatory reporting & high-precision valuation",
-                    "Recommended Model": "Monte Carlo Unified",
-                    "Rationale": "Highest accuracy with variance reduction techniques"
+                    "Recommended Model": "Monte Carlo Unified / Binomial Tree",
+                    "Rationale": "High accuracy with numerical methods"
                 },
                 {
                     "Use Case": "Theoretical analysis & quick estimates",
@@ -1340,8 +1371,8 @@ if run:
                 },
                 {
                     "Use Case": "Validation & calibration",
-                    "Recommended Model": "Monte Carlo",
-                    "Rationale": "Standard implementation for benchmarking"
+                    "Recommended Model": "Monte Carlo / Binomial Tree",
+                    "Rationale": "Standard implementations for benchmarking"
                 }
             ]
             guide_df = pd.DataFrame(model_guide)
@@ -1365,26 +1396,20 @@ if run:
                 use_container_width=True,
                 height=180
             )
-            
             st.markdown('<h3 class="subsection-header">Implementation Considerations</h3>', unsafe_allow_html=True)
             st.markdown('<div class="executive-summary">', unsafe_allow_html=True)
             st.markdown('<div class="executive-summary-text">', unsafe_allow_html=True)
-            
             st.markdown('<p><span class="highlight">Training Requirements:</span> The Monte Carlo ML model requires '
                        'an initial training phase using high-quality Monte Carlo simulations. This is a one-time cost '
                        'that pays dividends in subsequent prediction speed.</p>', unsafe_allow_html=True)
-            
             st.markdown('<p><span class="highlight">Hardware Utilization:</span> The Monte Carlo Unified model can '
                        'leverage GPU acceleration for significant speed improvements, while the ML model benefits '
-                       'from standard CPU resources for inference.</p>', unsafe_allow_html=True)
-            
+                       'from standard CPU resources for inference. The Binomial Tree is typically CPU-based and scales with the number of steps.</p>', unsafe_allow_html=True)
             st.markdown('<p><span class="highlight">Accuracy Trade-offs:</span> There is always a trade-off between '
                        'speed and accuracy. Understanding your specific business requirements will guide the optimal '
                        'model selection for each use case.</p>', unsafe_allow_html=True)
-            
             st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
-    
     except Exception as e:
         st.error(f"An error occurred during benchmarking: {str(e)}")
         logger.exception("Critical error in benchmarking")
@@ -1422,6 +1447,10 @@ else:
             <div style="background-color: #1e293b; padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #334155;">
                 <span style="color: #f8fafc; font-weight: 500;">Monte Carlo ML</span>
                 <div style="color: #94a3b8; font-size: 0.9rem; margin-top: 0.2rem;">Machine learning accelerated</div>
+            </div>
+            <div style="background-color: #1e293b; padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #334155;">
+                <span style="color: #f8fafc; font-weight: 500;">Binomial Tree</span>
+                <div style="color: #94a3b8; font-size: 0.9rem; margin-top: 0.2rem;">Lattice method</div>
             </div>
         </div>
     </div>
