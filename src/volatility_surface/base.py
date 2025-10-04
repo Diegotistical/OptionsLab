@@ -1,13 +1,14 @@
 # src/volatility_surface/base.py
 
+import logging
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, TypeVar, Generic
-import pandas as pd
+from typing import Dict, Generic, List, Optional, TypeVar
+
 import numpy as np
+import pandas as pd
 from sklearn.preprocessing import StandardScaler
-import logging
 
 ModelType = TypeVar("ModelType")
 
@@ -27,6 +28,7 @@ def benchmark_method(enabled_attr: str):
         def train(self, ...):
             ...
     """
+
     def decorator(func):
         def wrapper(self, *args, **kwargs):
             if getattr(self, enabled_attr, False):
@@ -38,7 +40,9 @@ def benchmark_method(enabled_attr: str):
                 return result
             else:
                 return func(self, *args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -54,7 +58,11 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
         - Abstract API to implement train, predict, save, and load logic
     """
 
-    def __init__(self, feature_columns: Optional[List[str]] = None, enable_benchmark: bool = False) -> None:
+    def __init__(
+        self,
+        feature_columns: Optional[List[str]] = None,
+        enable_benchmark: bool = False,
+    ) -> None:
         """
         Initialize the base volatility model.
 
@@ -64,13 +72,13 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
         """
         self._lock = threading.RLock()
         self.feature_columns: List[str] = feature_columns or [
-            'moneyness',
-            'log_moneyness',
-            'time_to_maturity',
-            'ttm_squared',
-            'risk_free_rate',
-            'historical_volatility',
-            'volatility_skew'
+            "moneyness",
+            "log_moneyness",
+            "time_to_maturity",
+            "ttm_squared",
+            "risk_free_rate",
+            "historical_volatility",
+            "volatility_skew",
         ]
         self.scaler: StandardScaler = StandardScaler()
         self.model: Optional[ModelType] = None
@@ -78,7 +86,7 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
         self._benchmark_timings: Dict[str, float] = {}
         self._enable_benchmark = enable_benchmark
 
-    #  Lifecycle hooks (no-op) 
+    #  Lifecycle hooks (no-op)
     def _on_train_start(self, df: pd.DataFrame) -> None: ...
     def _on_train_end(self, metrics: Dict[str, float]) -> None: ...
     def _on_predict_start(self, df: pd.DataFrame) -> None: ...
@@ -90,7 +98,7 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
     def _on_load_model_start(self, model_path: str, scaler_path: str) -> None: ...
     def _on_load_model_end(self, model_path: str, scaler_path: str) -> None: ...
 
-    #  Public API 
+    #  Public API
     @benchmark_method("_enable_benchmark")
     def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
         """
@@ -191,22 +199,29 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
                 raise RuntimeError("Model must be trained before evaluation.")
 
             self._validate_features(df)
-            if 'implied_volatility' not in df.columns:
+            if "implied_volatility" not in df.columns:
                 raise ValueError("Ground truth 'implied_volatility' column is missing.")
 
-            y_true = df['implied_volatility'].values.astype(np.float64)
+            y_true = df["implied_volatility"].values.astype(np.float64)
             y_pred = self.predict_volatility(df)
 
             if y_pred.shape != y_true.shape:
-                raise ValueError(f"Prediction shape {y_pred.shape} does not match ground truth shape {y_true.shape}.")
+                raise ValueError(
+                    f"Prediction shape {y_pred.shape} does not match ground truth shape {y_true.shape}."
+                )
 
-            from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
+            from sklearn.metrics import (
+                mean_absolute_error,
+                mean_absolute_percentage_error,
+                mean_squared_error,
+                r2_score,
+            )
 
             metrics = {
-                'rmse': float(np.sqrt(mean_squared_error(y_true, y_pred))),
-                'mae': float(mean_absolute_error(y_true, y_pred)),
-                'r2': float(r2_score(y_true, y_pred)),
-                'mape': float(mean_absolute_percentage_error(y_true, y_pred))
+                "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+                "mae": float(mean_absolute_error(y_true, y_pred)),
+                "r2": float(r2_score(y_true, y_pred)),
+                "mape": float(mean_absolute_percentage_error(y_true, y_pred)),
             }
             self._on_evaluate_end(metrics)
             return metrics
@@ -272,10 +287,14 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
             raise ValueError(f"Missing required feature columns: {sorted(missing)}")
 
         non_numeric = [
-            col for col in self.feature_columns if not pd.api.types.is_numeric_dtype(df[col])
+            col
+            for col in self.feature_columns
+            if not pd.api.types.is_numeric_dtype(df[col])
         ]
         if non_numeric:
-            raise ValueError(f"Non-numeric feature columns detected: {sorted(non_numeric)}")
+            raise ValueError(
+                f"Non-numeric feature columns detected: {sorted(non_numeric)}"
+            )
 
         if df[self.feature_columns].isnull().values.any():
             raise ValueError("NaN values detected in feature columns.")
@@ -283,7 +302,9 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
         if not np.isfinite(df[self.feature_columns].values).all():
             raise ValueError("Infinite or NaN values detected in feature columns.")
 
-    def _prepare_features(self, df: pd.DataFrame, fit_scaler: bool = False) -> np.ndarray:
+    def _prepare_features(
+        self, df: pd.DataFrame, fit_scaler: bool = False
+    ) -> np.ndarray:
         """
         Validate and scale features.
 

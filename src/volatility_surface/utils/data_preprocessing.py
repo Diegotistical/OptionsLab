@@ -1,10 +1,11 @@
 # src / volatility_surface / utils / data_preprocessing.py
 
+import logging
+from typing import Dict, Optional, Tuple, Union
+
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-import logging
-from typing import Optional, Tuple, Dict, Union
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ if not logger.hasHandlers():
 def scale_data(
     data: Union[pd.DataFrame, np.ndarray],
     scaler: Optional[StandardScaler] = None,
-    fit: bool = False
+    fit: bool = False,
 ) -> Tuple[Union[pd.DataFrame, np.ndarray], StandardScaler]:
     """
     Scale data with strict leakage prevention.
@@ -59,8 +60,7 @@ def scale_data(
 
 
 def validate_domain(
-    data: Union[pd.DataFrame, np.ndarray],
-    train_scaler: StandardScaler
+    data: Union[pd.DataFrame, np.ndarray], train_scaler: StandardScaler
 ) -> Dict[str, Union[list, np.ndarray, float]]:
     """
     Validate whether samples are within 3σ of the training distribution.
@@ -90,29 +90,32 @@ def validate_domain(
     feature_names = getattr(
         train_scaler,
         "feature_names_in_",
-        [f"feature_{i}" for i in range(data_array.shape[1])]
+        [f"feature_{i}" for i in range(data_array.shape[1])],
     )
 
     # Compute per-sample domain mask
     lower_bounds = train_mean - 3 * train_std
     upper_bounds = train_mean + 3 * train_std
-    domain_mask = np.all((data_array >= lower_bounds) & (data_array <= upper_bounds), axis=1)
+    domain_mask = np.all(
+        (data_array >= lower_bounds) & (data_array <= upper_bounds), axis=1
+    )
 
     tolerance_ratio = np.mean(domain_mask)
 
     if not np.all(domain_mask):
-        logger.warning(f"{np.sum(~domain_mask)} samples out of domain ({1 - tolerance_ratio:.2%} OOD)")
+        logger.warning(
+            f"{np.sum(~domain_mask)} samples out of domain ({1 - tolerance_ratio:.2%} OOD)"
+        )
 
     return {
         "feature_names": feature_names,
         "domain_mask": domain_mask,
-        "tolerance_ratio": tolerance_ratio
+        "tolerance_ratio": tolerance_ratio,
     }
 
 
 def inverse_transform(
-    scaled_data: Union[pd.DataFrame, np.ndarray],
-    scaler: StandardScaler
+    scaled_data: Union[pd.DataFrame, np.ndarray], scaler: StandardScaler
 ) -> Union[pd.DataFrame, np.ndarray]:
     """
     Inverse transform scaled data back to original feature space.

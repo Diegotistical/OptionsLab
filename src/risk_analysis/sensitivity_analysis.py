@@ -1,9 +1,10 @@
 # src/risk_analysis/sensitivity_analysis.py
 
+import logging
 from typing import Callable, Dict
+
 import numpy as np
 import pandas as pd
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class SensitivityAnalysis:
         # h^2 term: use average spacing squared for stability
         h = (h_up - h_down) / 2.0
         denom = (2.0 * h) ** 2 / 4.0  # simplifies to h^2
-        gamma = (p_up - 2.0 * p_mid + p_down) / (h ** 2)
+        gamma = (p_up - 2.0 * p_mid + p_down) / (h**2)
         return gamma
 
     def compute_vega(
@@ -103,9 +104,15 @@ class SensitivityAnalysis:
         Expects column 'implied_volatility' (or 'implied_vol').
         """
         self._validate_market_df(market_df)
-        vol_col = "implied_volatility" if "implied_volatility" in market_df.columns else "implied_vol"
+        vol_col = (
+            "implied_volatility"
+            if "implied_volatility" in market_df.columns
+            else "implied_vol"
+        )
         if vol_col not in market_df.columns:
-            raise ValueError("market_df must contain 'implied_volatility' or 'implied_vol' column")
+            raise ValueError(
+                "market_df must contain 'implied_volatility' or 'implied_vol' column"
+            )
 
         up = market_df.copy()
         down = market_df.copy()

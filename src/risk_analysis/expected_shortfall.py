@@ -1,8 +1,9 @@
 # src/risk_analysis/expected_shortfall.py
 
-from typing import Iterable, Optional
-import numpy as np
 import logging
+from typing import Iterable, Optional
+
+import numpy as np
 from scipy.stats import norm
 
 # Configure logging
@@ -46,7 +47,9 @@ class ExpectedShortfall:
         tail = r[r <= cutoff]
         if tail.size == 0:
             # no observations in tail; return worst loss
-            logger.warning("historical_es: no tail observations at given alpha; returning worst loss")
+            logger.warning(
+                "historical_es: no tail observations at given alpha; returning worst loss"
+            )
             worst = -float(np.min(r))
             return worst
         es = -float(np.mean(tail))
@@ -69,7 +72,9 @@ class ExpectedShortfall:
         return float(es)
 
     @staticmethod
-    def monte_carlo_es(simulated_returns: Iterable[float], alpha: float = 0.95) -> float:
+    def monte_carlo_es(
+        simulated_returns: Iterable[float], alpha: float = 0.95
+    ) -> float:
         """
         ES estimated from simulated return scenarios.
         Accepts any iterable of simulated returns (PnL).

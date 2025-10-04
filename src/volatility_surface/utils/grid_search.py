@@ -7,10 +7,10 @@ from typing import Any, Dict, List, Optional, Type, Union
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 from ..base import VolatilityModelBase
 
@@ -41,19 +41,20 @@ def _evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, f
     return {
         "rmse": np.sqrt(mean_squared_error(y_true, y_pred)),
         "mae": mean_absolute_error(y_true, y_pred),
-        "r2": r2_score(y_true, y_pred)
+        "r2": r2_score(y_true, y_pred),
     }
 
 
-#  PUBLIC API 
+#  PUBLIC API
+
 
 def tune_model(
     model_class: Union[Type, BaseEstimator],
     df: pd.DataFrame,
     param_grid: Dict[str, list],
-    target_col: str = 'implied_volatility',
+    target_col: str = "implied_volatility",
     cv_folds: int = 5,
-    n_jobs: int = -1
+    n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """
     Universal hyperparameter tuner for:
@@ -67,11 +68,11 @@ def tune_model(
     X, y = _split_features_target(df, target_col)
 
     # Determine model type
-    is_custom = (
-        isinstance(model_class, type) and issubclass(model_class, VolatilityModelBase)
+    is_custom = isinstance(model_class, type) and issubclass(
+        model_class, VolatilityModelBase
     )
-    is_sklearn_estimator = (
-        isinstance(model_class, type) and issubclass(model_class, BaseEstimator)
+    is_sklearn_estimator = isinstance(model_class, type) and issubclass(
+        model_class, BaseEstimator
     )
 
     if is_custom:
@@ -88,7 +89,7 @@ def _tune_custom_model(
     model_class: Type[VolatilityModelBase],
     df: pd.DataFrame,
     param_grid: Dict[str, list],
-    cv_folds: int = 5
+    cv_folds: int = 5,
 ) -> Dict[str, Any]:
     """Manual grid search for custom models implementing train/evaluate API."""
     best_score = float("inf")
@@ -98,7 +99,9 @@ def _tune_custom_model(
     kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
     param_combos = _generate_param_combinations(param_grid)
 
-    logger.info(f"Tuning {model_class.__name__} with {len(param_combos)} param combos...")
+    logger.info(
+        f"Tuning {model_class.__name__} with {len(param_combos)} param combos..."
+    )
 
     for params in param_combos:
         scores = []
@@ -107,7 +110,7 @@ def _tune_custom_model(
             model = model_class(**params)
             model.train(train_df)
             preds = model.predict(val_df)
-            y_true = val_df['implied_volatility'].values
+            y_true = val_df["implied_volatility"].values
             metrics = _evaluate_predictions(y_true, preds)
             scores.append(metrics["rmse"])
 
@@ -122,7 +125,7 @@ def _tune_custom_model(
         "best_score": best_score,
         "cv_scores": fold_scores,
         "cv_mean": np.mean(fold_scores),
-        "cv_std": np.std(fold_scores)
+        "cv_std": np.std(fold_scores),
     }
 
 
@@ -132,13 +135,10 @@ def _tune_sklearn_model(
     y: np.ndarray,
     param_grid: Dict[str, list],
     cv_folds: int = 5,
-    n_jobs: int = -1
+    n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """Grid search for sklearn estimators with StandardScaler in pipeline."""
-    pipeline = Pipeline([
-        ("scaler", StandardScaler()),
-        ("model", model_class())
-    ])
+    pipeline = Pipeline([("scaler", StandardScaler()), ("model", model_class())])
 
     prefixed_grid = {f"model__{k}": v for k, v in param_grid.items()}
     grid_search = GridSearchCV(
@@ -147,16 +147,16 @@ def _tune_sklearn_model(
         cv=KFold(cv_folds, shuffle=True, random_state=42),
         scoring="neg_root_mean_squared_error",
         n_jobs=n_jobs,
-        verbose=1
+        verbose=1,
     )
     grid_search.fit(X, y)
 
     return {
         "best_params": grid_search.best_params_,
         "best_score": -grid_search.best_score_,
-        "cv_scores": -grid_search.cv_results_['mean_test_score'],
-        "cv_mean": np.mean(-grid_search.cv_results_['mean_test_score']),
-        "cv_std": np.std(-grid_search.cv_results_['mean_test_score'])
+        "cv_scores": -grid_search.cv_results_["mean_test_score"],
+        "cv_mean": np.mean(-grid_search.cv_results_["mean_test_score"]),
+        "cv_std": np.std(-grid_search.cv_results_["mean_test_score"]),
     }
 
 
@@ -164,10 +164,10 @@ def nested_cross_validate(
     model_class: Type,
     df: pd.DataFrame,
     param_grid: Dict[str, list],
-    target_col: str = 'implied_volatility',
+    target_col: str = "implied_volatility",
     outer_folds: int = 5,
     inner_folds: int = 3,
-    n_jobs: int = -1
+    n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """
     Nested cross-validation with inner hyperparameter tuning.
@@ -187,13 +187,15 @@ def nested_cross_validate(
             param_grid,
             target_col=target_col,
             cv_folds=inner_folds,
-            n_jobs=n_jobs
+            n_jobs=n_jobs,
         )
         best_params = tuner_results["best_params"]
         best_params_list.append(best_params)
 
         # Fit on full train fold
-        if isinstance(model_class, type) and issubclass(model_class, VolatilityModelBase):
+        if isinstance(model_class, type) and issubclass(
+            model_class, VolatilityModelBase
+        ):
             model = model_class(**best_params)
             model.train(train_df)
             preds = model.predict(val_df)
@@ -213,5 +215,5 @@ def nested_cross_validate(
         "nested_scores": outer_scores,
         "nested_mean": np.mean(outer_scores),
         "nested_std": np.std(outer_scores),
-        "best_params_per_fold": best_params_list
+        "best_params_per_fold": best_params_list,
     }

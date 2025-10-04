@@ -2,6 +2,7 @@
 
 import pandas as pd
 
+
 def check_required_columns(df: pd.DataFrame, columns: list):
     """
     Ensures all required columns exist in df. Raises ValueError if any missing.

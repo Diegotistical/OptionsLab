@@ -4,8 +4,6 @@
 
 from .expected_shortfall import ExpectedShortfall
 from .sensitivity_analysis import SensitivityAnalysis
-from .stress_testing import StressTester, StressScenario
+from .stress_testing import StressScenario, StressTester
 
 __all__ = ["ExpectedShortfall", "SensitivityAnalysis", "StressTester", "StressScenario"]
-
-
