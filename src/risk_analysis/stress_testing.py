@@ -1,10 +1,11 @@
 # src/risk_analysis/stress_testing.py
 
-from typing import Callable, Iterable, List
-import numpy as np
-import pandas as pd
 import logging
 import threading
+from typing import Callable, Iterable, List
+
+import numpy as np
+import pandas as pd
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -13,7 +14,9 @@ logger = logging.getLogger(__name__)
 class StressScenario:
     """Container for a single stress scenario."""
 
-    def __init__(self, name: str, field: str, magnitude: float, shock_type: str = "relative"):
+    def __init__(
+        self, name: str, field: str, magnitude: float, shock_type: str = "relative"
+    ):
         if shock_type not in ("relative", "absolute"):
             raise ValueError("shock_type must be 'relative' or 'absolute'")
         self.name = name
@@ -39,7 +42,9 @@ class StressTester:
         self.price_fn = price_fn
         self._lock = threading.RLock()
 
-    def _apply_scenario(self, market_df: pd.DataFrame, scenario: StressScenario) -> pd.DataFrame:
+    def _apply_scenario(
+        self, market_df: pd.DataFrame, scenario: StressScenario
+    ) -> pd.DataFrame:
         df = market_df.copy()
         if scenario.field not in df.columns:
             raise ValueError(f"Market DataFrame has no column '{scenario.field}'")
@@ -49,7 +54,9 @@ class StressTester:
             df[scenario.field] = df[scenario.field] + scenario.magnitude
         return df
 
-    def run_scenarios(self, market_df: pd.DataFrame, scenarios: Iterable[StressScenario]) -> pd.DataFrame:
+    def run_scenarios(
+        self, market_df: pd.DataFrame, scenarios: Iterable[StressScenario]
+    ) -> pd.DataFrame:
         """
         Run scenarios and return a DataFrame summarizing P&L impact per scenario.
         Columns: total_pnl, mean_pnl, median_pnl, worst_pnl, es_95
@@ -72,7 +79,9 @@ class StressTester:
                     # ES across instruments: expected loss in worst 5% of instruments
                     cutoff = np.quantile(pnl, 0.05)
                     tail = pnl[pnl <= cutoff]
-                    es_95 = -float(np.mean(tail)) if tail.size > 0 else float(np.min(pnl))
+                    es_95 = (
+                        -float(np.mean(tail)) if tail.size > 0 else float(np.min(pnl))
+                    )
                 except Exception:
                     es_95 = float(np.nan)
                 rows.append(

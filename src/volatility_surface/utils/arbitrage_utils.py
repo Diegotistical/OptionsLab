@@ -18,10 +18,13 @@ Notes / assumptions:
 """
 
 from __future__ import annotations
-from typing import Iterable, List, Tuple, Dict, Any
+
+from typing import Any, Dict, Iterable, List, Tuple
+
 import numpy as np
 
 __all__ = ["check_butterfly_arbitrage", "check_calendar_arbitrage"]
+
 
 def _ensure_1d_array(x: Iterable) -> np.ndarray:
     arr = np.asarray(x, dtype=float)
@@ -29,11 +32,12 @@ def _ensure_1d_array(x: Iterable) -> np.ndarray:
         raise ValueError("Input must be 1D")
     return arr
 
+
 def check_butterfly_arbitrage(
     strikes: Iterable[float],
     implied_vols: Iterable[float],
     ttm: float,
-    tol: float = 1e-12
+    tol: float = 1e-12,
 ) -> Dict[str, Any]:
     """
     Check for butterfly arbitrage on a single slice (fixed maturity).
@@ -77,7 +81,7 @@ def check_butterfly_arbitrage(
         raise ValueError("ttm must be positive")
 
     # Total variance
-    w = (sigma ** 2) * float(ttm)
+    w = (sigma**2) * float(ttm)
 
     # Ensure strikes strictly increasing
     if not np.all(np.diff(K) > 0):
@@ -114,14 +118,12 @@ def check_butterfly_arbitrage(
         "violations": violations,
         "total_violation": float(total_violation),
         "w": w,
-        "d2w": d2w
+        "d2w": d2w,
     }
 
 
 def check_calendar_arbitrage(
-    ttms: Iterable[float],
-    total_variances: Iterable[float],
-    tol: float = 1e-12
+    ttms: Iterable[float], total_variances: Iterable[float], tol: float = 1e-12
 ) -> Dict[str, Any]:
     """
     Simple calendar arbitrage check: total variance must be non-decreasing with maturity.
@@ -175,7 +177,7 @@ def check_calendar_arbitrage(
 # ---------------------
 if __name__ == "__main__":
     # Small smoke tests
-    K = np.array([80., 90., 100., 110., 120.])
+    K = np.array([80.0, 90.0, 100.0, 110.0, 120.0])
     # Construct a convex total variance: sigma increases away from ATM -> convex w
     sigma_convex = np.array([0.40, 0.30, 0.20, 0.30, 0.40])
     res = check_butterfly_arbitrage(K, sigma_convex, ttm=0.5)
@@ -185,7 +187,14 @@ if __name__ == "__main__":
     sigma_bad = sigma_convex.copy()
     sigma_bad[2] = 0.45  # bump center -> non-convex
     res2 = check_butterfly_arbitrage(K, sigma_bad, ttm=0.5, tol=1e-14)
-    print("Non-convex test:", res2["is_arbitrage_free"], "violations:", res2["violations"], "total:", res2["total_violation"])
+    print(
+        "Non-convex test:",
+        res2["is_arbitrage_free"],
+        "violations:",
+        res2["violations"],
+        "total:",
+        res2["total_violation"],
+    )
 
     # Calendar test
     ttms = np.array([0.1, 0.5, 1.0, 2.0])
@@ -194,17 +203,18 @@ if __name__ == "__main__":
     w_bad = np.array([0.01, 0.019, 0.04, 0.035])
     print("Calendar bad:", check_calendar_arbitrage(ttms, w_bad))
 
+
 def validate_domain(X: np.ndarray, reference_X: np.ndarray = None) -> float:
     """
     Simple domain validation for volatility surfaces.
-    
+
     Parameters
     ----------
     X : np.ndarray
         Feature matrix after engineering (n_samples x n_features)
     reference_X : np.ndarray, optional
         Reference features (e.g., training features) to compare distribution
-    
+
     Returns
     -------
     validity_score : float

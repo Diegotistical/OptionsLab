@@ -1,17 +1,21 @@
 # File: src/volatility_surface/utils/tensor_utils.py
 
+from typing import List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pandas as pd
-import numpy as np
-from typing import List, Tuple, Optional
 
 # ============================
 # Tensor Utilities
 # ============================
 
-def ensure_tensor(x, dtype: torch.dtype = torch.float32, device: Optional[torch.device] = None) -> torch.Tensor:
+
+def ensure_tensor(
+    x, dtype: torch.dtype = torch.float32, device: Optional[torch.device] = None
+) -> torch.Tensor:
     """
     Convert numpy array, pandas DataFrame/Series, list or scalar into a PyTorch tensor.
     - Keeps dtype control and moves to device if requested.
@@ -40,7 +44,13 @@ def ensure_tensor(x, dtype: torch.dtype = torch.float32, device: Optional[torch.
     raise ValueError(f"Cannot convert type {type(x)} to tensor.")
 
 
-def to_tensor(df: pd.DataFrame, feature_cols: List[str], target_col: Optional[str] = None, dtype: torch.dtype = torch.float32, device: Optional[torch.device] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+def to_tensor(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+    target_col: Optional[str] = None,
+    dtype: torch.dtype = torch.float32,
+    device: Optional[torch.device] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
     Convert features and optional target from dataframe to tensors.
     Returns (X, y) where y is None if target_col is None.
@@ -59,8 +69,15 @@ def to_tensor(df: pd.DataFrame, feature_cols: List[str], target_col: Optional[st
 # Simple MLP Model
 # ============================
 
+
 class SimpleMLP(nn.Module):
-    def __init__(self, input_dim: int, hidden_layers: List[int], output_dim: int = 1, activation: nn.Module = nn.ReLU):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_layers: List[int],
+        output_dim: int = 1,
+        activation: nn.Module = nn.ReLU,
+    ):
         super().__init__()
         layers = []
         prev_dim = input_dim
@@ -80,12 +97,24 @@ class SimpleMLP(nn.Module):
 # ============================
 
 
-def train_model(model: nn.Module, X: torch.Tensor, y: torch.Tensor, epochs: int = 50, lr: float = 1e-3, batch_size: Optional[int] = None, verbose: bool = False) -> nn.Module:
+def train_model(
+    model: nn.Module,
+    X: torch.Tensor,
+    y: torch.Tensor,
+    epochs: int = 50,
+    lr: float = 1e-3,
+    batch_size: Optional[int] = None,
+    verbose: bool = False,
+) -> nn.Module:
     """
     Simple training loop using Adam + MSELoss. Accepts full-batch or mini-batch depending on batch_size.
     Returns the trained model (in-place).
     """
-    device = next(model.parameters()).device if any(p.requires_grad for p in model.parameters()) else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+        next(model.parameters()).device
+        if any(p.requires_grad for p in model.parameters())
+        else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
     model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -108,7 +137,7 @@ def train_model(model: nn.Module, X: torch.Tensor, y: torch.Tensor, epochs: int 
             model.train()
             permutation = torch.randperm(n)
             for i in range(0, n, batch_size):
-                idx = permutation[i:i+batch_size]
+                idx = permutation[i : i + batch_size]
                 xb = X[idx]
                 yb = y[idx]
                 optimizer.zero_grad()

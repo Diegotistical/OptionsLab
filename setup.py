@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="optionslab",
@@ -18,7 +18,7 @@ setup(
         "scikit-learn>=1.2",
         "matplotlib>=3.7",
         "seaborn>=0.12",
-        "streamlit>=1.22"
+        "streamlit>=1.22",
         # añade cualquier otra dependencia que uses
     ],
     classifiers=[

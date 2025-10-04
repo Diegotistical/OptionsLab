@@ -1,9 +1,10 @@
 # src/utils/utils.py
 
-import numpy as np
 import logging
-from typing import Union, Tuple
 from enum import Enum  # Change to StrEnum if Python 3.11+
+from typing import Tuple, Union
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +12,19 @@ logger = logging.getLogger(__name__)
 MIN_VOL = 1e-4
 MIN_DENOM = 1e-10
 
+
 # ===== Custom Exceptions =====
 class FinancialError(Exception):
     """Base exception for pricing model errors"""
+
     pass
+
 
 class NumericalStabilityError(FinancialError):
     """Numerical instability in calculations"""
+
     pass
+
 
 # ===== Option Type Enum =====
 class OptionType(Enum):  # Use StrEnum if Python 3.11+
@@ -32,6 +38,7 @@ class OptionType(Enum):  # Use StrEnum if Python 3.11+
         except ValueError:
             raise ValueError(f"Invalid option type: '{s}'. Use 'call' or 'put'.")
 
+
 # ===== Input Validation =====
 def validate_inputs(
     S: float,
@@ -40,7 +47,7 @@ def validate_inputs(
     r: float,
     sigma: float,
     option_type: OptionType,
-    q: float = 0.0
+    q: float = 0.0,
 ) -> None:
     """Comprehensive financial input validation"""
     if S <= 0:
@@ -50,11 +57,16 @@ def validate_inputs(
     if T < 0:
         raise ValueError(f"Time to maturity must be non-negative. Got T={T}")
     if sigma < MIN_VOL:
-        raise NumericalStabilityError(f"Volatility too low: {sigma}. Minimum is {MIN_VOL}")
+        raise NumericalStabilityError(
+            f"Volatility too low: {sigma}. Minimum is {MIN_VOL}"
+        )
     if not isinstance(option_type, OptionType):
-        raise TypeError(f"Invalid option type: {type(option_type)}. Use OptionType enum.")
+        raise TypeError(
+            f"Invalid option type: {type(option_type)}. Use OptionType enum."
+        )
     if q < 0 or q >= 1:
         raise ValueError(f"Dividend yield must be in [0, 1). Got q={q}")
+
 
 # ===== Safe Division =====
 def safe_division(numerator: float, denominator: float) -> float:
@@ -64,14 +76,10 @@ def safe_division(numerator: float, denominator: float) -> float:
         return np.sign(denominator) * np.finfo(float).max
     return numerator / denominator
 
+
 # ===== d1 and d2 Calculation =====
 def calculate_d1_d2(
-    S: float,
-    K: float,
-    T: float,
-    r: float,
-    sigma: float,
-    q: float = 0.0
+    S: float, K: float, T: float, r: float, sigma: float, q: float = 0.0
 ) -> Tuple[float, float]:
     """Numerically stable calculation of d1 and d2"""
     if T == 0:
@@ -92,6 +100,7 @@ def calculate_d1_d2(
 
     return d1, d2
 
+
 # ===== Moneyness =====
 def compute_moneyness(S: float, K: float) -> float:
     """Safe moneyness calculation with sanity checks"""
@@ -99,12 +108,10 @@ def compute_moneyness(S: float, K: float) -> float:
         raise ValueError("Strike price cannot be zero for moneyness calculation.")
     return S / K
 
+
 # ===== Edge Case Handler =====
 def handle_edge_cases(
-    S: float,
-    K: float,
-    T: float,
-    option_type: OptionType
+    S: float, K: float, T: float, option_type: OptionType
 ) -> Union[float, None]:
     """
     Handle boundary cases before main calculations.
@@ -118,6 +125,7 @@ def handle_edge_cases(
         return S if option_type == OptionType.CALL else 0.0
     return None
 
+
 # ===== Export List =====
 __all__ = [
     "FinancialError",
@@ -127,6 +135,6 @@ __all__ = [
     "safe_division",
     "calculate_d1_d2",
     "compute_moneyness",
-    "handle_edge_cases"
+    "handle_edge_cases",
 ]
 # This module provides utility functions and classes for financial calculations,including input validation, numerical stability checks, and option type handling.
