@@ -1,11 +1,9 @@
-# 📈 Options Lab
+# Options Lab
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/github/license/Diegotistical/OptionsLab)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/Diegotistical/OptionsLab)](https://github.com/Diegotistical/quant-options-toolkit/commits/main)
 [![Streamlit](https://img.shields.io/badge/Open%20in%20Streamlit-App-red?logo=streamlit&logoColor=white)](https://optionslab.streamlit.app/)
-
-# 🧠 OptionsLab
 
 **OptionsLab** is a modular quantitative research framework focused on **volatility surface modeling**, **Options Pricing using different models**, and **risk analysis** for derivatives pricing and trading strategy development.  
 It provides a unified interface for building, fitting, and evaluating option pricing models — from classical methods (Binomial Trees, Black-Scholes) to machine learning–based volatility surface models (MLP, SVR, Random Forest & XGBoost).
@@ -315,6 +313,7 @@ Project maintained by [Diegotistical](https://github.com/Diegotistical).
 ---
 
 *Note: This project is in active development. Expect breaking changes as new features are added.*
+
 
 
 
