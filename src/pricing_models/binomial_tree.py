@@ -10,14 +10,12 @@ from numba import njit
 
 class OptionType(IntEnum):
     """Enumeration for option type"""
-
     CALL = 0
     PUT = 1
 
 
 class ExerciseStyle(IntEnum):
     """Enumeration for exercise style"""
-
     EUROPEAN = 0
     AMERICAN = 1
 
@@ -34,7 +32,6 @@ def error_handler(func: Callable) -> Callable:
     """
     Decorator to wrap public methods with consistent error handling.
     """
-
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
@@ -44,7 +41,6 @@ def error_handler(func: Callable) -> Callable:
             raise BinomialTreeError(
                 f"Unexpected error in {func.__name__}: {str(e)}"
             ) from e
-
     return wrapper
 
 
@@ -75,6 +71,8 @@ def _solve_binomial_tree(
     # Risk-neutral probability
     drift = np.exp((r - q) * dt)
     p = (drift - d) / (u - d)
+    
+    # Clamp probabilities to ensure stability
     if p < 0.0:
         p = 0.0
     elif p > 1.0:
@@ -250,7 +248,6 @@ class BinomialTree:
     ) -> dict:
         """
         Compute Price, Delta, and Gamma efficiently in a single run.
-        Useful for dashboards to avoid re-running the model 3 times.
         """
         if T <= 1e-6:
             p = max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
