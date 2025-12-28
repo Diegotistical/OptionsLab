@@ -73,8 +73,6 @@ def _solve_binomial_tree(
     df = np.exp(-r * dt)
     
     # Risk-neutral probability
-    # If sigma is very low or steps very high, drift can dominate. 
-    # Standard CRR clamping is applied.
     drift = np.exp((r - q) * dt)
     p = (drift - d) / (u - d)
     if p < 0.0:
@@ -86,9 +84,6 @@ def _solve_binomial_tree(
     # We allocate ONE array of size N+1. This is O(N) memory.
     values = np.empty(n_steps + 1, dtype=np.float64)
     
-    # Pre-calculate asset prices at maturity to vectorise payoff calculation
-    # S_T[j] = S * u^j * d^(N-j)
-    # We can optimize this by noting S * d^N * (u/d)^j
     u_over_d = u / d
     s_d_N = S * (d ** n_steps)
     
@@ -100,22 +95,11 @@ def _solve_binomial_tree(
             values[j] = max(K - spot_price, 0.0)
 
     # Variables to store option values at Step 2 and Step 1 for Greeks
-    # We capture them as we pass through those time steps.
-    # Indices for Greeks:
-    # Step 2: V[2] (uu), V[1] (ud), V[0] (dd)
-    # Step 1: V[1] (u), V[0] (d)
-    
     val_2_2, val_2_1, val_2_0 = 0.0, 0.0, 0.0
     val_1_1, val_1_0 = 0.0, 0.0
 
     # 3. Backward Induction
-    # Loop from N-1 down to 0
     for i in range(n_steps - 1, -1, -1):
-        
-        # At step i, we compute values[0..i]
-        # We assume d = 1/u for calculating node Spot Price
-        # Node (i, j): Spot = S * u^j * d^(i-j)
-        # Factor out S * d^i and multiply by (u/d)^j
         current_s_d_i = S * (d ** i)
         
         for j in range(i + 1):
@@ -145,14 +129,12 @@ def _solve_binomial_tree(
     # 4. Extract Results
     price = values[0]
     
-    # Delta (Standard CRR approximation at t=0)
-    # Delta = (V_u - V_d) / (S_u - S_d)
+    # Delta
     s_u = S * u
     s_d = S * d
     delta = (val_1_1 - val_1_0) / (s_u - s_d)
     
     # Gamma
-    # Gamma = ( (V_uu - V_ud)/(S_uu - S_ud) - (V_ud - V_dd)/(S_ud - S_dd) ) / (0.5 * (S_uu - S_dd))
     s_uu = S * u * u
     s_ud = S # u*d = 1
     s_dd = S * d * d
@@ -176,11 +158,6 @@ class BinomialTree:
     """
 
     def __init__(self, num_steps: int = 200):
-        """
-        Args:
-            num_steps: Depth of the tree. 200 is usually sufficient for high accuracy.
-                       Values > 2000 may degrade performance.
-        """
         if num_steps <= 0:
             raise InputValidationError("num_steps must be positive integer")
         self.num_steps = num_steps
@@ -228,10 +205,6 @@ class BinomialTree:
             return max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
 
         ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
-        
-        # The kernel returns (price, delta, gamma). We only return price.
-        # Numba is fast enough that re-running this is negligible compared to
-        # the overhead of finite differences, but explicit caching could be added if needed.
         price, _, _ = _solve_binomial_tree(
             S, K, T, r, sigma, q, self.num_steps, ot, es
         )
@@ -246,7 +219,7 @@ class BinomialTree:
         q: float = 0.0,
     ) -> float:
         """Computes Delta analytically from the tree."""
-        if T <= 1e-6: return 0.0 # Approximation at maturity
+        if T <= 1e-6: return 0.0
         
         ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
         _, delta, _ = _solve_binomial_tree(S, K, T, r, sigma, q, self.num_steps, ot, es)
