@@ -11,11 +11,41 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 # --- 1. Path Setup & Dynamic Reloading ---
+# --- 1. Path Setup & Direct File Loading ---
 # Add src to path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
-if SRC.exists():
-    sys.path.insert(0, str(SRC))
+
+# Define the exact path to the backend file
+BACKEND_FILE = SRC / "pricing_models" / "binomial_tree.py"
+
+if not BACKEND_FILE.exists():
+    st.error(f"❌ Backend file not found at: {BACKEND_FILE}")
+    st.info("Please ensure the file structure is: src/pricing_models/binomial_tree.py")
+    st.stop()
+
+# FORCE LOAD: We use importlib to read the file directly from disk, ignoring cache.
+# This guarantees that 'BinomialTree' is the version currently written in the file.
+try:
+    import importlib.util
+    
+    # 1. Create a spec from the specific file location
+    spec = importlib.util.spec_from_file_location("pricing_models.binomial_tree", BACKEND_FILE)
+    
+    # 2. Create a new module based on that spec
+    bt_module = importlib.util.module_from_spec(spec)
+    
+    # 3. Execute the module to populate it (this runs the python code in the file)
+    spec.loader.exec_module(bt_module)
+    
+    # 4. Extract the classes we need from this fresh module
+    BinomialTree = bt_module.BinomialTree
+    ExerciseStyle = bt_module.ExerciseStyle
+    OptionType = bt_module.OptionType
+
+except Exception as e:
+    st.error(f"❌ Error loading backend module: {e}")
+    st.stop()
 
 # We use importlib to ensure that if you modify the backend logic,
 # Streamlit picks up the changes without needing a full server restart.
