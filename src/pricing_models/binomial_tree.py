@@ -58,9 +58,6 @@ def _solve_binomial_tree(
 ) -> Tuple[float, float, float]:
     """
     Core Numba kernel for Binomial Tree.
-    
-    Uses O(N) memory by storing only the current layer of option values.
-    Computes Price, Delta, and Gamma in a single backward pass.
     """
     # 1. Precompute parameters
     dt = T / n_steps
@@ -79,7 +76,6 @@ def _solve_binomial_tree(
         p = 1.0
     
     # 2. Initialize terminal payoffs (Step N)
-    # We allocate ONE array of size N+1. This is O(N) memory.
     values = np.empty(n_steps + 1, dtype=np.float64)
     
     u_over_d = u / d
@@ -147,12 +143,6 @@ def _solve_binomial_tree(
 class BinomialTree:
     """
     Production-grade CRR Binomial Tree pricer.
-    
-    Optimizations:
-    - O(N) memory complexity (reusing 1D array)
-    - Single-pass calculation for Price, Delta, and Gamma
-    - Numba JIT compilation
-    - Analytical Greeks (no finite difference re-runs)
     """
 
     def __init__(self, num_steps: int = 200):
@@ -189,11 +179,7 @@ class BinomialTree:
     @error_handler
     def price(
         self,
-        S: float,
-        K: float,
-        T: float,
-        r: float,
-        sigma: float,
+        S: float, K: float, T: float, r: float, sigma: float,
         option_type: Literal["call", "put"],
         exercise_style: Literal["european", "american"] = "european",
         q: float = 0.0,

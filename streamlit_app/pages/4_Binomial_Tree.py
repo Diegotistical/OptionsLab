@@ -1,40 +1,37 @@
 import math
 import sys
 import time
-import importlib
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
-# --- 1. Path Setup & Dynamic Reloading ---
-# Add src to path
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
-if SRC.exists():
-    sys.path.insert(0, str(SRC))
+# --- 1. Path Setup ---
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# We use importlib to ensure that if you modify the backend logic,
-# Streamlit picks up the changes without needing a full server restart.
+# Add the project root to sys.path so we can find 'src'
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+# --- 2. Imports ---
 try:
-    import pricing_models.binomial_tree as bt_module
-    importlib.reload(bt_module) # Force reload of the module
-    from pricing_models.binomial_tree import BinomialTree, ExerciseStyle, OptionType
+    # Now we can import cleanly starting from 'src'
+    from src.pricing_models.binomial_tree import BinomialTree, ExerciseStyle, OptionType
 except ImportError as e:
-    st.error(f"❌ Could not import BinomialTree module: {e}")
-    st.info(f"Ensure {SRC} exists and contains pricing_models/binomial_tree.py")
+    st.error(f"❌ Import Error: {e}")
+    st.write(f"📂 Debug: Project Root identified as: {PROJECT_ROOT}")
+    st.info("Ensure the file 'src/pricing_models/binomial_tree.py' exists relative to that root.")
     st.stop()
-except Exception as e:
-    st.error(f"❌ Error loading backend module: {e}")
+except AttributeError:
+    st.error("❌ Stale Code Detected")
+    st.warning("Please restart the app (Ctrl+C and run again) to load the updated backend code.")
     st.stop()
 
-# --- 2. Page Configuration ---
+# --- 3. Page Configuration ---
 st.set_page_config(page_title="Binomial Tree Pricing", page_icon="🌳", layout="wide")
 
-# Custom CSS for dark mode
 st.markdown(
     """
 <style>
@@ -65,23 +62,15 @@ st.markdown(
         display: inline-block;
         margin: 0.2rem;
     }
-    .value-breakdown {
-        background: #2d2d2d;
-        padding: 0.5rem 1rem;
-        border-radius: 5px;
-        margin: 0.5rem 0;
-    }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 st.title("🌳 Binomial Tree Pricing")
-st.caption(
-    "Production-Grade CRR Model • O(N) Memory • Analytical Greeks"
-)
+st.caption("Production-Grade CRR Model • O(N) Memory • Analytical Greeks")
 
-# --- 3. Sidebar Parameters ---
+# --- 4. Sidebar Parameters ---
 st.sidebar.header("⚙️ Pricing Parameters")
 
 col1, col2 = st.columns(2)
@@ -100,9 +89,7 @@ with col2:
 with st.expander("🔧 Advanced Parameters"):
     adv_col1, adv_col2 = st.columns(2)
     with adv_col1:
-        num_steps = st.slider(
-            "Tree Steps", min_value=10, max_value=2000, value=200, step=10
-        )
+        num_steps = st.slider("Tree Steps", min_value=10, max_value=2000, value=200, step=10)
     with adv_col2:
         show_tree = st.checkbox("Visualize Tree (First 5 Steps)", value=True)
         calculate_greeks = st.checkbox("Calculate Greeks", value=True)
@@ -110,36 +97,27 @@ with st.expander("🔧 Advanced Parameters"):
 
 st.sidebar.markdown("---")
 st.sidebar.header("🚀 Performance Info")
-st.sidebar.markdown(
-    '<div class="numba-badge">Numba JIT Compiled</div>', unsafe_allow_html=True
-)
-st.sidebar.markdown(
-    """
+st.sidebar.markdown('<div class="numba-badge">Numba JIT Compiled</div>', unsafe_allow_html=True)
+st.sidebar.markdown("""
 **Optimization Features:**
 - O(N) Memory (1D Array)
 - Analytical Greeks (Single Pass)
 - FastMath Enabled
-"""
-)
+""")
 
-# --- 4. Main Calculation Logic ---
+# --- 5. Main Logic ---
 if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
     try:
-        # Initialize model
         bt = BinomialTree(num_steps=num_steps)
-
-        # Time the calculation
         start_time = time.time()
         
         if calculate_greeks:
-            # Check if method exists (defensive coding against stale cache)
             if hasattr(bt, "calculate_all"):
                 results = bt.calculate_all(S, K, T, r, sigma, option_type, exercise_style, q)
                 price = results["price"]
                 delta = results["delta"]
                 gamma = results["gamma"]
             else:
-                # Fallback if module reload failed for some reason
                 st.warning("⚠️ Using legacy calculation methods. Reboot app if issues persist.")
                 price = bt.price(S, K, T, r, sigma, option_type, exercise_style, q)
                 delta = bt.delta(S, K, T, r, sigma, option_type, exercise_style, q)
@@ -148,46 +126,33 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
             price = bt.price(S, K, T, r, sigma, option_type, exercise_style, q)
             delta, gamma = 0.0, 0.0
 
-        pricing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        pricing_time = (time.time() - start_time) * 1000
 
-        # Calculate intrinsic and time value
-        if option_type == "call":
-            intrinsic_value = max(S - K, 0.0)
-        else:  # put option
-            intrinsic_value = max(K - S, 0.0)
+        # Intrinsic & Time Value
+        intrinsic_value = max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
         time_value = max(price - intrinsic_value, 0.0)
 
-        # Display results
+        # Display Results
         st.success(f"**Option Price: ${price:.4f}**")
 
-        # Value breakdown
         col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
-        with col2:
-            st.metric("Time Value", f"${time_value:.4f}")
+        with col1: st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
+        with col2: st.metric("Time Value", f"${time_value:.4f}")
         with col3:
-            moneyness = (
-                "ITM"
-                if intrinsic_value > 0
-                else "ATM" if intrinsic_value == 0 else "OTM"
-            )
+            moneyness = "ITM" if intrinsic_value > 0 else "ATM" if intrinsic_value == 0 else "OTM"
             st.metric("Moneyness", moneyness)
 
-        # Performance metrics
+        # Performance Metrics
         perf_col1, perf_col2, perf_col3 = st.columns(3)
-        with perf_col1:
-            st.metric("Calculation Time", f"{pricing_time:.2f} ms")
+        with perf_col1: st.metric("Calculation Time", f"{pricing_time:.2f} ms")
         with perf_col2:
-            steps_per_ms = (
-                num_steps / pricing_time if pricing_time > 0 else float("inf")
-            )
+            steps_per_ms = num_steps / pricing_time if pricing_time > 0 else float("inf")
             st.metric("Steps/ms", f"{steps_per_ms:.1f}")
         with perf_col3:
             total_nodes = ((num_steps + 1) * (num_steps + 2)) // 2
             st.metric("Virtual Nodes", f"{total_nodes:,}")
 
-        # Performance card
+        # Performance Card
         with st.container():
             st.markdown('<div class="performance-card">', unsafe_allow_html=True)
             perf_col1, perf_col2, perf_col3 = st.columns(3)
@@ -215,18 +180,13 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
         if calculate_greeks:
             st.subheader("📊 Greeks Calculation")
             greek_col1, greek_col2, greek_col3, greek_col4, greek_col5 = st.columns(5)
-            with greek_col1:
-                st.metric("Delta", f"{delta:.4f}", help="Price sensitivity to underlying asset")
-            with greek_col2:
-                st.metric("Gamma", f"{gamma:.4f}", help="Delta sensitivity to underlying asset")
-            with greek_col3:
-                st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
-            with greek_col4:
-                st.metric("Time Value", f"${time_value:.4f}")
-            with greek_col5:
-                st.metric("Greeks Time", "Included")
+            with greek_col1: st.metric("Delta", f"{delta:.4f}", help="Price sensitivity to underlying")
+            with greek_col2: st.metric("Gamma", f"{gamma:.4f}", help="Delta sensitivity to underlying")
+            with greek_col3: st.metric("Intrinsic Value", f"${intrinsic_value:.4f}")
+            with greek_col4: st.metric("Time Value", f"${time_value:.4f}")
+            with greek_col5: st.metric("Greeks Time", "Included")
 
-        # --- Tree Visualization ---
+        # Tree Visualization
         if show_tree and num_steps >= 5:
             st.subheader("🌿 Binomial Tree Visualization")
             viz_steps = min(5, num_steps)
@@ -250,7 +210,6 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                 for _, node in current_nodes.iterrows():
                     up_node = next_nodes[next_nodes["node"] == node["node"] + 1]
                     down_node = next_nodes[next_nodes["node"] == node["node"]]
-                    
                     if not up_node.empty:
                         fig.add_trace(go.Scatter(
                             x=[i, i + 1], y=[node["price"], up_node.iloc[0]["price"]],
@@ -271,15 +230,10 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                     text=step_nodes["price"].round(2), textposition="middle center",
                     name=f"Step {step}", textfont=dict(color="white", size=10)
                 ))
-
-            fig.update_layout(
-                title=f"Binomial Tree (First {viz_steps} Steps) - Total Steps: {num_steps}",
-                xaxis_title="Time Steps", yaxis_title="Asset Price",
-                showlegend=False, template="plotly_dark", height=500,
-            )
+            fig.update_layout(title=f"First {viz_steps} Steps", template="plotly_dark", height=500)
             st.plotly_chart(fig, use_container_width=True)
 
-        # --- Convergence Analysis ---
+        # Convergence Analysis
         if convergence_analysis:
             st.subheader("📈 Convergence Analysis")
             st.info("Analyzing how price converges as tree steps increase...")
@@ -291,7 +245,6 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
 
             convergence_data = []
             progress_bar = st.progress(0)
-
             for i, steps in enumerate(convergence_steps):
                 bt_temp = BinomialTree(num_steps=steps)
                 conv_price = bt_temp.price(S, K, T, r, sigma, option_type, exercise_style, q)
@@ -305,21 +258,12 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
                 mode="lines+markers", name="Price Convergence",
                 line=dict(color="#ff4b4b", width=3), marker=dict(size=8)
             ))
-            fig_conv.add_hline(
-                y=price, line_dash="dash", line_color="green",
-                annotation_text=f"Final Price: ${price:.4f}"
-            )
-            fig_conv.update_layout(
-                title="Price Convergence vs Tree Steps",
-                xaxis_title="Number of Steps", yaxis_title="Option Price",
-                template="plotly_dark", height=400
-            )
+            fig_conv.add_hline(y=price, line_dash="dash", line_color="green", annotation_text=f"Final: ${price:.4f}")
+            fig_conv.update_layout(title="Convergence vs Steps", template="plotly_dark", height=400)
             st.plotly_chart(fig_conv, use_container_width=True)
 
-        # --- Probability Distribution ---
+        # Probability Distribution
         st.subheader("📊 Risk-Neutral Probability Distribution")
-        
-        # Calculate terminal probabilities
         dt = T / num_steps
         u = np.exp(sigma * np.sqrt(dt))
         d = 1.0 / u
@@ -327,86 +271,58 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
         p = max(0.0, min(1.0, p))
 
         if num_steps > 100:
-            st.info("Approximating large tree distribution with Log-Normal for visualization.")
+            st.info("Using Log-Normal approximation for large tree visualization.")
             mu = np.log(S) + (r - q - 0.5 * sigma**2) * T
             x = np.linspace(S*0.5, S*1.5, 100)
             pdf = (1 / (x * sigma * np.sqrt(T) * np.sqrt(2 * np.pi))) * np.exp(-(np.log(x) - mu)**2 / (2 * sigma**2 * T))
-            
             fig_dist = go.Figure()
             fig_dist.add_trace(go.Scatter(x=x, y=pdf, mode='lines', name='Log-Normal PDF', line=dict(color="#00a4db")))
         else:
-            terminal_prices = []
-            probabilities = []
+            terminal_prices, probabilities = [], []
             for j in range(num_steps + 1):
                 terminal_price = S * (u**j) * (d ** (num_steps - j))
                 try:
-                    # Using log factorial for stability with larger N (but still < 100)
                     log_n_fact = math.lgamma(num_steps + 1)
                     log_k_fact = math.lgamma(j + 1)
                     log_nk_fact = math.lgamma(num_steps - j + 1)
                     log_comb = log_n_fact - log_k_fact - log_nk_fact
                     prob = math.exp(log_comb + j * math.log(p) + (num_steps - j) * math.log(1 - p))
-                except:
-                    prob = 0
+                except: prob = 0
                 terminal_prices.append(terminal_price)
                 probabilities.append(prob)
-
             fig_dist = go.Figure()
-            fig_dist.add_trace(go.Bar(
-                x=terminal_prices, y=probabilities,
-                name="Probability", marker_color="#00a4db"
-            ))
+            fig_dist.add_trace(go.Bar(x=terminal_prices, y=probabilities, name="Probability", marker_color="#00a4db"))
 
         fig_dist.add_vline(x=K, line_dash="dash", line_color="red", annotation_text=f"Strike: ${K}")
-        fig_dist.update_layout(
-            title="Terminal Price Distribution (Risk-Neutral)",
-            xaxis_title="Terminal Asset Price", yaxis_title="Probability",
-            template="plotly_dark", height=400
-        )
+        fig_dist.update_layout(title="Terminal Price Distribution", template="plotly_dark", height=400)
         st.plotly_chart(fig_dist, use_container_width=True)
 
     except Exception as e:
         st.error(f"❌ Error in calculation: {str(e)}")
-        st.info("Check the console for detailed error information")
 
-# --- 5. Theory Section ---
+# --- 6. Theory ---
 with st.expander("📚 Binomial Tree Theory & Optimization"):
     tab1, tab2, tab3 = st.tabs(["Theory", "Optimization", "Algorithm"])
-
     with tab1:
         st.markdown(r"""
-        ### Cox-Ross-Rubinstein (CRR) Model
-        The binomial tree model prices options by creating a lattice of possible asset price paths.
-        
         **Key Formulas:**
         - Up factor: $u = e^{\sigma\sqrt{\Delta t}}$
         - Down factor: $d = 1/u = e^{-\sigma\sqrt{\Delta t}}$
         - Risk-neutral probability: $p = \frac{e^{(r-q)\Delta t} - d}{u - d}$
         """)
-
     with tab2:
         st.markdown("""
-        ### 🚀 Production-Grade Optimization
-        **Why this model is fast:**
-        1. **O(N) Memory:** We only store the current column of option values, not the full N² tree.
-        2. **Analytical Greeks:** We calculate Delta and Gamma using the tree values at step 1 and 2 during the backward pass.
-        3. **Numba JIT:** The core logic is compiled to machine code.
+        **Why this is fast:**
+        1. **O(N) Memory:** Stores only current column of values.
+        2. **Analytical Greeks:** Calculated during backward pass (Step 1 & 2).
+        3. **Numba JIT:** Compiled to machine code.
         """)
-
     with tab3:
         st.markdown("""
-        ### 🔍 Algorithm Implementation
-        **Optimized Backward Induction:**
         ```python
         # Single array of size N+1
         values = initialize_payoffs()
-        
         for step from n-1 down to 0:
-            # Update values in-place
             values[:step+1] = discount * (p * values[1:] + (1-p) * values[:-1])
-            
-            # Capture nodes at step 2 and 1 for Gamma/Delta
-            if step == 2: save_gamma_nodes()
-            if step == 1: save_delta_nodes()
         ```
         """)
