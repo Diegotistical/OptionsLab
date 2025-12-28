@@ -1,9 +1,12 @@
-# src/risk_analysis/__init__.py
+from src.risk_analysis.expected_shortfall import ExpectedShortfall
+from src.risk_analysis.sensitivity_analysis import SensitivityAnalysis
+from src.risk_analysis.stress_testing import StressScenario, StressTester
+from src.risk_analysis.var import VaRAnalyzer
 
-"""Risk analysis package: expected shortfall, sensitivity analysis, stress testing."""
-
-from .expected_shortfall import ExpectedShortfall
-from .sensitivity_analysis import SensitivityAnalysis
-from .stress_testing import StressScenario, StressTester
-
-__all__ = ["ExpectedShortfall", "SensitivityAnalysis", "StressTester", "StressScenario"]
+__all__ = [
+    "ExpectedShortfall",
+    "SensitivityAnalysis",
+    "StressTester",
+    "StressScenario",
+    "VaRAnalyzer",
+]
