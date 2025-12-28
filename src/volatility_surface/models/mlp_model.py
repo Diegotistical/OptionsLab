@@ -1,26 +1,30 @@
 # src/volatility_surface/models/mlp_model.py
 
 import threading
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
+import joblib
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import joblib
-from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
-import plotly.graph_objects as go
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
 from volatility_surface.base import VolatilityModelBase
 from volatility_surface.utils.feature_engineering import engineer_features
 from volatility_surface.utils.tensor_utils import ensure_tensor
 
 FEATURE_COLUMNS = [
-    'moneyness', 'log_moneyness', 'time_to_maturity',
-    'ttm_squared', 'risk_free_rate',
-    'historical_volatility', 'volatility_skew'
+    "moneyness",
+    "log_moneyness",
+    "time_to_maturity",
+    "ttm_squared",
+    "risk_free_rate",
+    "historical_volatility",
+    "volatility_skew",
 ]
 
 
@@ -28,21 +32,23 @@ class MLPModel(VolatilityModelBase, nn.Module):
     def __init__(
         self,
         hidden_layers: list = [64, 32],
-        activation: str = 'GELU',
+        activation: str = "GELU",
         activation_kwargs: Optional[Dict] = None,
         dropout_rate: float = 0.2,
         smoothness_weight: float = 0.0,
         use_batchnorm: bool = True,
         use_dropout: bool = True,
-        scaler_type: str = 'standard',
+        scaler_type: str = "standard",
         learning_rate: float = 1e-3,
         epochs: int = 200,
         early_stopping_patience: int = 15,
         batch_size: int = 32,
         random_seed: int = 42,
-        **kwargs
+        **kwargs,
     ):
-        VolatilityModelBase.__init__(self, feature_columns=FEATURE_COLUMNS, enable_benchmark=True)
+        VolatilityModelBase.__init__(
+            self, feature_columns=FEATURE_COLUMNS, enable_benchmark=True
+        )
         nn.Module.__init__(self)
         self._lock = threading.RLock()
 
@@ -95,14 +101,18 @@ class MLPModel(VolatilityModelBase, nn.Module):
         return nn.Sequential(*layers)
 
     def _initialize_scaler(self):
-        scalers = {'standard': StandardScaler(), 'robust': RobustScaler(), 'minmax': MinMaxScaler()}
+        scalers = {
+            "standard": StandardScaler(),
+            "robust": RobustScaler(),
+            "minmax": MinMaxScaler(),
+        }
         if self.scaler_type not in scalers:
             raise ValueError(f"Unsupported scaler type: {self.scaler_type}")
         self.scaler = scalers[self.scaler_type]
 
     def _prepare_data(self, df: pd.DataFrame, targets: Optional[np.ndarray] = None):
         df = df.copy()
-        df['time_to_maturity'] = np.maximum(df['time_to_maturity'], 1e-5)
+        df["time_to_maturity"] = np.maximum(df["time_to_maturity"], 1e-5)
         features = engineer_features(df)
         features_np = features.values
         if not self.trained:
@@ -111,7 +121,9 @@ class MLPModel(VolatilityModelBase, nn.Module):
             scaled = self.scaler.transform(features_np)
         features_tensor = ensure_tensor(scaled, dtype=torch.float32, device=self.device)
         if targets is not None:
-            targets_tensor = ensure_tensor(targets.astype(np.float32), device=self.device)
+            targets_tensor = ensure_tensor(
+                targets.astype(np.float32), device=self.device
+            )
             return features_tensor, targets_tensor
         return features_tensor
 
@@ -131,23 +143,31 @@ class MLPModel(VolatilityModelBase, nn.Module):
             raise ValueError("DataFrame `df` must be provided to train the model.")
         with self._lock:
             self._on_train_start(df)
-            train_df, val_df = train_test_split(df, test_size=val_split, random_state=42)
-            X_train, y_train = self._prepare_data(train_df, train_df['implied_volatility'].values)
-            X_val, y_val = self._prepare_data(val_df, val_df['implied_volatility'].values)
+            train_df, val_df = train_test_split(
+                df, test_size=val_split, random_state=42
+            )
+            X_train, y_train = self._prepare_data(
+                train_df, train_df["implied_volatility"].values
+            )
+            X_val, y_val = self._prepare_data(
+                val_df, val_df["implied_volatility"].values
+            )
 
             train_loader = torch.utils.data.DataLoader(
                 torch.utils.data.TensorDataset(X_train, y_train),
-                batch_size=self.batch_size, shuffle=True
+                batch_size=self.batch_size,
+                shuffle=True,
             )
             val_loader = torch.utils.data.DataLoader(
-                torch.utils.data.TensorDataset(X_val, y_val),
-                batch_size=self.batch_size
+                torch.utils.data.TensorDataset(X_val, y_val), batch_size=self.batch_size
             )
 
             self.optimizer = optim.AdamW(self.parameters(), lr=self.learning_rate)
-            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=10, factor=0.5)
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, "min", patience=10, factor=0.5
+            )
 
-            best_val_loss = float('inf')
+            best_val_loss = float("inf")
             patience_counter = 0
 
             for epoch in range(self.epochs):
@@ -156,7 +176,9 @@ class MLPModel(VolatilityModelBase, nn.Module):
                 for Xb, yb in train_loader:
                     self.optimizer.zero_grad()
                     out = self.forward(Xb)
-                    loss = self._compute_loss(out, yb, Xb if self.smoothness_weight > 0 else None)
+                    loss = self._compute_loss(
+                        out, yb, Xb if self.smoothness_weight > 0 else None
+                    )
                     loss.backward()
                     nn.utils.clip_grad_norm_(self.parameters(), 1.0)
                     self.optimizer.step()
@@ -191,7 +213,9 @@ class MLPModel(VolatilityModelBase, nn.Module):
             self._on_train_end({"train_loss": train_loss, "val_loss": best_val_loss})
             return {"train_loss": train_loss, "val_loss": best_val_loss}
 
-    def predict_volatility(self, df: pd.DataFrame, mc_samples: int = 1, compute_greeks: bool = False):
+    def predict_volatility(
+        self, df: pd.DataFrame, mc_samples: int = 1, compute_greeks: bool = False
+    ):
         if df is None:
             raise ValueError("DataFrame `df` must be provided for prediction.")
         with self._lock:
@@ -229,21 +253,33 @@ class MLPModel(VolatilityModelBase, nn.Module):
 
     def plot_training_history(self, title="Training / Validation Loss"):
         fig = go.Figure()
-        fig.add_trace(go.Scatter(y=self.train_history["train_loss"], mode="lines+markers", name="Train Loss"))
-        fig.add_trace(go.Scatter(y=self.train_history["val_loss"], mode="lines+markers", name="Validation Loss"))
+        fig.add_trace(
+            go.Scatter(
+                y=self.train_history["train_loss"],
+                mode="lines+markers",
+                name="Train Loss",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                y=self.train_history["val_loss"],
+                mode="lines+markers",
+                name="Validation Loss",
+            )
+        )
         fig.update_layout(title=title, xaxis_title="Epoch", yaxis_title="MSE Loss")
         fig.show()
 
     def _save_model_impl(self, model_path: str, scaler_path: str) -> None:
         with self._lock:
-            torch.save({'model_state_dict': self.state_dict()}, model_path)
+            torch.save({"model_state_dict": self.state_dict()}, model_path)
             joblib.dump(self.scaler, scaler_path)
             joblib.dump(self.train_history, f"{model_path}_history.pkl")
 
     def _load_model_impl(self, model_path: str, scaler_path: str) -> None:
         with self._lock:
             data = torch.load(model_path, map_location=self.device)
-            self.load_state_dict(data['model_state_dict'])
+            self.load_state_dict(data["model_state_dict"])
             self.scaler = joblib.load(scaler_path)
             try:
                 self.train_history = joblib.load(f"{model_path}_history.pkl")

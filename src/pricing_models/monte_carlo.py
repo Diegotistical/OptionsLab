@@ -1,16 +1,20 @@
 # src/pricing_models/monte_carlo.py
 
+from typing import Callable, Literal, Optional
+
 import numpy as np
-from typing import Optional, Literal, Callable
+
 try:
     from numba import njit
+
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
 
-from ..exceptions.montecarlo_exceptions import MonteCarloError, InputValidationError
+from ..exceptions.montecarlo_exceptions import InputValidationError, MonteCarloError
 
-__all__ = ['MonteCarloPricer']
+__all__ = ["MonteCarloPricer"]
+
 
 class MonteCarloPricer:
     """
@@ -30,10 +34,12 @@ class MonteCarloPricer:
         num_simulations: int = 10000,
         num_steps: int = 100,
         seed: Optional[int] = None,
-        use_numba: bool = False
+        use_numba: bool = False,
     ):
         if num_simulations <= 0 or num_steps <= 0:
-            raise InputValidationError("num_simulations and num_steps must be positive integers")
+            raise InputValidationError(
+                "num_simulations and num_steps must be positive integers"
+            )
         if use_numba and not NUMBA_AVAILABLE:
             raise MonteCarloError("Numba not installed; cannot enable acceleration")
 
@@ -43,18 +49,27 @@ class MonteCarloPricer:
         self.use_numba = use_numba
 
     def _validate_inputs(
-        self, S: float, K: float, T: float, r: float, sigma: float, option_type: str, q: float
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: str,
+        q: float,
     ):
         if option_type not in {"call", "put"}:
             raise InputValidationError("option_type must be 'call' or 'put'")
         if S <= 0 or K <= 0 or T <= 0 or sigma < 0 or q < 0:
-            raise InputValidationError("Spot, strike, T, sigma, and q must be non-negative and T > 0")
+            raise InputValidationError(
+                "Spot, strike, T, sigma, and q must be non-negative and T > 0"
+            )
 
     def _simulate_terminal_prices_vectorized(
         self, S: float, T: float, r: float, sigma: float, q: float
     ) -> np.ndarray:
         dt = T / self.num_steps
-        drift = (r - q - 0.5 * sigma ** 2) * dt
+        drift = (r - q - 0.5 * sigma**2) * dt
         vol = sigma * np.sqrt(dt)
 
         rand_normals = self.rng.normal(size=(self.num_simulations, self.num_steps))
@@ -89,7 +104,7 @@ class MonteCarloPricer:
             return terminal
 
         dt = T / self.num_steps
-        drift = (r - q - 0.5 * sigma ** 2) * dt
+        drift = (r - q - 0.5 * sigma**2) * dt
         vol = sigma * np.sqrt(dt)
         return simulate(self.num_simulations, self.num_steps, S, drift, vol)
 
@@ -101,8 +116,14 @@ class MonteCarloPricer:
         return self._simulate_terminal_prices_vectorized(S, T, r, sigma, q)
 
     def price(
-        self, S: float, K: float, T: float, r: float, sigma: float,
-        option_type: Literal["call", "put"], q: float = 0.0
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        q: float = 0.0,
     ) -> float:
         """
         Compute European option price using Monte Carlo simulation.
@@ -131,18 +152,34 @@ class MonteCarloPricer:
         return np.exp(-r * T) * np.mean(payoffs)
 
     def delta(
-        self, S: float, K: float, T: float, r: float, sigma: float,
-        option_type: Literal["call", "put"], q: float = 0.0, h: float = 1e-4
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        q: float = 0.0,
+        h: float = 1e-4,
     ) -> float:
         """
         Delta: derivative of price with respect to spot price.
         """
-        return (self.price(S + h, K, T, r, sigma, option_type, q) -
-                self.price(S - h, K, T, r, sigma, option_type, q)) / (2 * h)
+        return (
+            self.price(S + h, K, T, r, sigma, option_type, q)
+            - self.price(S - h, K, T, r, sigma, option_type, q)
+        ) / (2 * h)
 
     def gamma(
-        self, S: float, K: float, T: float, r: float, sigma: float,
-        option_type: Literal["call", "put"], q: float = 0.0, h: float = 1e-4
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        q: float = 0.0,
+        h: float = 1e-4,
     ) -> float:
         """
         Gamma: second derivative of price with respect to spot price.
@@ -153,33 +190,60 @@ class MonteCarloPricer:
         return (price_up - 2 * price_mid + price_down) / (h * h)
 
     def vega(
-        self, S: float, K: float, T: float, r: float, sigma: float,
-        option_type: Literal["call", "put"], q: float = 0.0, h: float = 1e-4
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        q: float = 0.0,
+        h: float = 1e-4,
     ) -> float:
         """
         Vega: derivative of price with respect to volatility.
         """
-        return (self.price(S, K, T, r, sigma + h, option_type, q) -
-                self.price(S, K, T, r, sigma - h, option_type, q)) / (2 * h)
+        return (
+            self.price(S, K, T, r, sigma + h, option_type, q)
+            - self.price(S, K, T, r, sigma - h, option_type, q)
+        ) / (2 * h)
 
     def theta(
-        self, S: float, K: float, T: float, r: float, sigma: float,
-        option_type: Literal["call", "put"], q: float = 0.0, dt: float = 1/365
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        q: float = 0.0,
+        dt: float = 1 / 365,
     ) -> float:
         """
         Theta: derivative of price with respect to time (negative decay).
         """
         if T > dt:
-            return (self.price(S, K, T - dt, r, sigma, option_type, q) -
-                    self.price(S, K, T, r, sigma, option_type, q)) / dt
+            return (
+                self.price(S, K, T - dt, r, sigma, option_type, q)
+                - self.price(S, K, T, r, sigma, option_type, q)
+            ) / dt
         return -self.price(S, K, T, r, sigma, option_type, q) / dt
 
     def rho(
-        self, S: float, K: float, T: float, r: float, sigma: float,
-        option_type: Literal["call", "put"], q: float = 0.0, h: float = 1e-4
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        q: float = 0.0,
+        h: float = 1e-4,
     ) -> float:
         """
         Rho: derivative of price with respect to interest rate.
         """
-        return (self.price(S, K, T, r + h, sigma, option_type, q) -
-                self.price(S, K, T, r, sigma, option_type, q)) / h
+        return (
+            self.price(S, K, T, r + h, sigma, option_type, q)
+            - self.price(S, K, T, r, sigma, option_type, q)
+        ) / h

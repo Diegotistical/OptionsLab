@@ -1,32 +1,32 @@
 # src / volatility_surface / models / svr_model.py
 
-import threading
 import os
+import threading
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
-from sklearn.svm import SVR
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
 
 from volatility_surface.base import VolatilityModelBase
-from volatility_surface.utils.feature_engineering import engineer_features
 from volatility_surface.utils.arbitrage_utils import validate_domain
+from volatility_surface.utils.feature_engineering import engineer_features
 
 
 class SVRModel(VolatilityModelBase):
     def __init__(
         self,
-        kernel: str = 'rbf',
+        kernel: str = "rbf",
         C: float = 1.0,
         epsilon: float = 0.1,
-        gamma: str = 'scale',
+        gamma: str = "scale",
         random_state: int = 42,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(feature_columns=None, enable_benchmark=True)
         self._lock = threading.RLock()
@@ -38,7 +38,9 @@ class SVRModel(VolatilityModelBase):
         self.random_state = random_state
 
         self.scaler = StandardScaler()
-        self.model = SVR(kernel=self.kernel, C=self.C, epsilon=self.epsilon, gamma=self.gamma)
+        self.model = SVR(
+            kernel=self.kernel, C=self.C, epsilon=self.epsilon, gamma=self.gamma
+        )
         self.trained = False
 
     def _train_impl(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:
@@ -46,11 +48,13 @@ class SVRModel(VolatilityModelBase):
             self._on_train_start(df)
             self.validate_input(df)  # will raise if features missing
 
-            train_df, val_df = train_test_split(df, test_size=val_split, random_state=self.random_state)
+            train_df, val_df = train_test_split(
+                df, test_size=val_split, random_state=self.random_state
+            )
             X_train = engineer_features(train_df)
-            y_train = train_df['implied_volatility'].values
+            y_train = train_df["implied_volatility"].values
             X_val = engineer_features(val_df)
-            y_val = val_df['implied_volatility'].values
+            y_val = val_df["implied_volatility"].values
 
             self.scaler.fit(X_train)
             X_train_scaled = self.scaler.transform(X_train)
@@ -63,15 +67,15 @@ class SVRModel(VolatilityModelBase):
             val_preds = self.model.predict(X_val_scaled)
 
             metrics = {
-                'train_rmse': np.sqrt(mean_squared_error(y_train, train_preds)),
-                'val_rmse': np.sqrt(mean_squared_error(y_val, val_preds)),
-                'train_r2': r2_score(y_train, train_preds),
-                'val_r2': r2_score(y_val, val_preds),
-                'validity': validate_domain(X_val, X_train)
+                "train_rmse": np.sqrt(mean_squared_error(y_train, train_preds)),
+                "val_rmse": np.sqrt(mean_squared_error(y_val, val_preds)),
+                "train_r2": r2_score(y_train, train_preds),
+                "val_r2": r2_score(y_val, val_preds),
+                "validity": validate_domain(X_val, X_train),
             }
             self._on_train_end(metrics)
             return metrics
-        
+
     def _predict_impl(self, X: np.ndarray) -> np.ndarray:
         """
         Internal prediction method for SVRModel.

@@ -1,15 +1,19 @@
 # tests/test_benchmarks.py
 
-import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 
 import time
+
 import numpy as np
-from pricing_models.black_scholes import black_scholes
+
 from pricing_models.binomial_tree import BinomialTree
+from pricing_models.black_scholes import black_scholes
 from pricing_models.monte_carlo_unified import MonteCarloPricer
+
 
 def benchmark_function(func, args, num_runs=10):
     """Run pricing function multiple times and report avg execution time"""
@@ -22,6 +26,7 @@ def benchmark_function(func, args, num_runs=10):
     avg_time = elapsed / num_runs
     return np.mean(prices), avg_time
 
+
 def benchmark_model(model, S, K, T, r, sigma, option_type, num_runs=10):
     """Wrapper for models that are class-based"""
     prices = []
@@ -32,6 +37,7 @@ def benchmark_model(model, S, K, T, r, sigma, option_type, num_runs=10):
     elapsed = time.perf_counter() - start_time
     avg_time = elapsed / num_runs
     return np.mean(prices), avg_time
+
 
 def main():
     S = 100.0
@@ -53,15 +59,22 @@ def main():
 
     # Black-Scholes
     price, avg_time = benchmark_function(black_scholes, bs_args, num_runs)
-    print(f"{'Black-Scholes':15} | Price: {price:.4f} | Avg Time per Run: {avg_time*1000:.2f} ms")
+    print(
+        f"{'Black-Scholes':15} | Price: {price:.4f} | Avg Time per Run: {avg_time*1000:.2f} ms"
+    )
 
     # Binomial Tree
     price, avg_time = benchmark_model(bt, S, K, T, r, sigma, option_type, num_runs)
-    print(f"{'Binomial Tree':15} | Price: {price:.4f} | Avg Time per Run: {avg_time*1000:.2f} ms")
+    print(
+        f"{'Binomial Tree':15} | Price: {price:.4f} | Avg Time per Run: {avg_time*1000:.2f} ms"
+    )
 
     # Monte Carlo
     price, avg_time = benchmark_model(mc, S, K, T, r, sigma, option_type, num_runs)
-    print(f"{'Monte Carlo':15} | Price: {price:.4f} | Avg Time per Run: {avg_time*1000:.2f} ms")
+    print(
+        f"{'Monte Carlo':15} | Price: {price:.4f} | Avg Time per Run: {avg_time*1000:.2f} ms"
+    )
+
 
 if __name__ == "__main__":
     main()

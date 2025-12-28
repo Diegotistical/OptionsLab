@@ -15,15 +15,15 @@ Design goals:
 
 from __future__ import annotations
 
+import logging
 import math
-import time
 import threading
-from typing import Callable, Iterable, List, Optional, Tuple, Dict, Any
+import time
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-import logging
 
 # Prefer your project's validation helpers if present
 try:
@@ -48,7 +48,7 @@ class InputValidationError(VaRError):
     """Input validation error."""
 
 
-#  Utilities 
+#  Utilities
 def _timeit(func: Callable) -> Callable:
     """Simple timing decorator that logs duration at INFO level."""
 
@@ -74,7 +74,7 @@ def _validate_confidence(alpha: float) -> None:
         raise InputValidationError("confidence_level must be in (0,1)")
 
 
-#  Main class 
+#  Main class
 class VaRAnalyzer:
     """
     Production-ready VaR analyzer.
@@ -98,9 +98,11 @@ class VaRAnalyzer:
         self._lock = threading.RLock()
 
     # Low-level helpers
-    
+
     @staticmethod
-    def _empirical_var_es_from_pnl(pnl: Iterable[float], alpha: float) -> Tuple[float, float]:
+    def _empirical_var_es_from_pnl(
+        pnl: Iterable[float], alpha: float
+    ) -> Tuple[float, float]:
         """Return (var_loss, es_loss) where both are positive numbers representing loss."""
         _validate_confidence(alpha)
         arr = _as_array(pnl)
@@ -117,7 +119,9 @@ class VaRAnalyzer:
     # Historical (non-parametric)
 
     @_timeit
-    def historical_var(self, pnl_series: Iterable[float], scale: Optional[float] = None) -> Dict[str, Any]:
+    def historical_var(
+        self, pnl_series: Iterable[float], scale: Optional[float] = None
+    ) -> Dict[str, Any]:
         """
         Historical VaR and ES computed directly from PnL series.
 
@@ -132,7 +136,10 @@ class VaRAnalyzer:
         """
         arr = _as_array(pnl_series)
         if arr.size < 30:
-            logger.warning("historical_var: small sample size (n=%d). Results may be unstable.", arr.size)
+            logger.warning(
+                "historical_var: small sample size (n=%d). Results may be unstable.",
+                arr.size,
+            )
 
         var_loss, es_loss = self._empirical_var_es_from_pnl(arr, self.confidence_level)
         s = float(scale) if scale is not None else 1.0
@@ -201,7 +208,11 @@ class VaRAnalyzer:
             es_loss = max(0.0, -mu_h + sigma_h * (phi_z / tail_prob))
 
         s = float(scale) if scale is not None else 1.0
-        return {"var": var_loss * s, "cvar": es_loss * s, "confidence_level": self.confidence_level}
+        return {
+            "var": var_loss * s,
+            "cvar": es_loss * s,
+            "confidence_level": self.confidence_level,
+        }
 
     # Monte Carlo on underlying price (vectorized)
 
@@ -242,7 +253,12 @@ class VaRAnalyzer:
 
         var_loss, es_loss = self._empirical_var_es_from_pnl(pnl, self.confidence_level)
         s = float(scale) if scale is not None else 1.0
-        return {"var": var_loss * s, "cvar": es_loss * s, "n_sims": num_simulations, "confidence_level": self.confidence_level}
+        return {
+            "var": var_loss * s,
+            "cvar": es_loss * s,
+            "n_sims": num_simulations,
+            "confidence_level": self.confidence_level,
+        }
 
     # Portfolio delta-normal VaR (multi-asset)
 
@@ -270,9 +286,17 @@ class VaRAnalyzer:
         cov = np.asarray(cov_matrix, dtype=float)
 
         if w.ndim != 1 or mu.ndim != 1:
-            raise InputValidationError("weights and expected_returns must be 1-D arrays")
-        if w.shape[0] != mu.shape[0] or cov.shape[0] != w.shape[0] or cov.shape[1] != w.shape[0]:
-            raise InputValidationError("dimension mismatch among weights, returns and covariance matrix")
+            raise InputValidationError(
+                "weights and expected_returns must be 1-D arrays"
+            )
+        if (
+            w.shape[0] != mu.shape[0]
+            or cov.shape[0] != w.shape[0]
+            or cov.shape[1] != w.shape[0]
+        ):
+            raise InputValidationError(
+                "dimension mismatch among weights, returns and covariance matrix"
+            )
 
         mu_h = float(w @ mu) * self.horizon_frac
         sigma_port = math.sqrt(float(w.T @ cov @ w)) * math.sqrt(self.horizon_frac)
@@ -283,7 +307,11 @@ class VaRAnalyzer:
         tail_prob = 1.0 - self.confidence_level
         es_loss = max(0.0, -mu_h + sigma_port * (phi_z / tail_prob))
 
-        return {"var": var_loss * portfolio_value, "cvar": es_loss * portfolio_value, "confidence_level": self.confidence_level}
+        return {
+            "var": var_loss * portfolio_value,
+            "cvar": es_loss * portfolio_value,
+            "confidence_level": self.confidence_level,
+        }
 
     # Option-aware VaR (vectorized pricer recommended)
 
@@ -334,7 +362,10 @@ class VaRAnalyzer:
                 sim_prices = pricer_fn(final_prices, pricer_params)
                 pnl = sim_prices - baseline_price  # PnL per unit notional
             except Exception:
-                logger.warning("pricer_fn vectorized call failed; falling back to Python loop", exc_info=True)
+                logger.warning(
+                    "pricer_fn vectorized call failed; falling back to Python loop",
+                    exc_info=True,
+                )
                 vectorized = False
 
         if not vectorized:
@@ -347,21 +378,34 @@ class VaRAnalyzer:
 
         var_loss, es_loss = self._empirical_var_es_from_pnl(pnl, self.confidence_level)
         s = float(scale) if scale is not None else 1.0
-        return {"var": var_loss * s, "cvar": es_loss * s, "n_sims": num_simulations, "confidence_level": self.confidence_level}
+        return {
+            "var": var_loss * s,
+            "cvar": es_loss * s,
+            "n_sims": num_simulations,
+            "confidence_level": self.confidence_level,
+        }
 
     # Stress test helpers
 
     @_timeit
-    def stress_test_var_from_returns(self, pnl_series: Iterable[float], shift: float, scale: Optional[float] = None) -> Dict[str, Any]:
+    def stress_test_var_from_returns(
+        self, pnl_series: Iterable[float], shift: float, scale: Optional[float] = None
+    ) -> Dict[str, Any]:
         """
         Simple stress test by adding a constant shift to the PnL series (e.g., shift = -0.1 for -10%).
         Returns VaR/ES computed on shocked series.
         """
         arr = _as_array(pnl_series)
         shocked = arr + float(shift)
-        var_loss, es_loss = self._empirical_var_es_from_pnl(shocked, self.confidence_level)
+        var_loss, es_loss = self._empirical_var_es_from_pnl(
+            shocked, self.confidence_level
+        )
         s = float(scale) if scale is not None else 1.0
-        return {"var": var_loss * s, "cvar": es_loss * s, "confidence_level": self.confidence_level}
+        return {
+            "var": var_loss * s,
+            "cvar": es_loss * s,
+            "confidence_level": self.confidence_level,
+        }
 
     @_timeit
     def batch_stress_test(
@@ -378,6 +422,14 @@ class VaRAnalyzer:
         rows = []
         for shift in shifts:
             shocked = arr + float(shift)
-            var_loss, es_loss = self._empirical_var_es_from_pnl(shocked, self.confidence_level)
-            rows.append({"shift": shift, "var": var_loss * (scale or 1.0), "cvar": es_loss * (scale or 1.0)})
+            var_loss, es_loss = self._empirical_var_es_from_pnl(
+                shocked, self.confidence_level
+            )
+            rows.append(
+                {
+                    "shift": shift,
+                    "var": var_loss * (scale or 1.0),
+                    "cvar": es_loss * (scale or 1.0),
+                }
+            )
         return pd.DataFrame(rows).set_index("shift")
