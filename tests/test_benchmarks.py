@@ -2,17 +2,15 @@
 
 import os
 import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-
-
 import time
-
 import numpy as np
 
-from pricing_models.binomial_tree import BinomialTree
-from pricing_models.black_scholes import black_scholes
-from pricing_models.monte_carlo_unified import MonteCarloPricer
+# Add project root to path so we can import 'src'
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from src.pricing_models.binomial_tree import BinomialTree
+from src.pricing_models.black_scholes import black_scholes
+from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni
 
 
 def benchmark_function(func, args, num_runs=10):
@@ -32,6 +30,10 @@ def benchmark_model(model, S, K, T, r, sigma, option_type, num_runs=10):
     prices = []
     start_time = time.perf_counter()
     for _ in range(num_runs):
+        # Note: Updated to match signature of Unified/Binomial pricers
+        # BinomialTree.price takes 'exercise_style', MonteCarlo takes 'q'
+        # We'll use a try-except or keyword unpacking to handle variations if needed,
+        # but here we'll pass standard arguments.
         price = model.price(S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type)
         prices.append(price)
     elapsed = time.perf_counter() - start_time
@@ -53,7 +55,8 @@ def main():
 
     # Initialize class-based models
     bt = BinomialTree(num_steps=500)
-    mc = MonteCarloPricer(num_simulations=50000, num_steps=100, seed=42)
+    # Using MonteCarloPricerUni from the unified module
+    mc = MonteCarloPricerUni(num_simulations=50000, num_steps=100, seed=42)
 
     print("Benchmarking option pricing models...\n")
 
@@ -78,8 +81,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Run this script to benchmark the option pricing models
-# It will print the average execution time for each model
-# python -m tests.test_benchmarks
-# Ensure you have the necessary models implemented in the src/pricing_models directory

@@ -30,15 +30,9 @@ class InputValidationError(BinomialTreeError):
     """Raised for invalid input parameters"""
 
 
-class NumericalWarning(UserWarning):
-    """Warnings about numerical precision issues"""
-
-
 def error_handler(func: Callable) -> Callable:
     """
     Decorator to wrap public methods with consistent error handling.
-
-    Catches exceptions and wraps them in BinomialTreeError.
     """
 
     def wrapper(*args, **kwargs):
@@ -55,98 +49,137 @@ def error_handler(func: Callable) -> Callable:
 
 
 @njit(cache=True, fastmath=True)
-def _compute_asset_prices(S: float, u: float, d: float, n_steps: int) -> np.ndarray:
-    """
-    Construct the binomial tree of underlying asset prices.
-
-    Args:
-        S: Spot price
-        u: Up factor
-        d: Down factor
-        n_steps: Number of steps in the tree
-
-    Returns:
-        2D array of shape (n_steps+1, n_steps+1) with asset prices at each node
-    """
-    asset_prices = np.empty((n_steps + 1, n_steps + 1), dtype=np.float64)
-    for i in range(n_steps + 1):
-        j = np.arange(i + 1)
-        asset_prices[i, : i + 1] = S * (u**j) * (d ** (i - j))
-    return asset_prices
-
-
-@njit(cache=True, fastmath=True)
-def _backward_induction(
-    asset_prices: np.ndarray,
+def _solve_binomial_tree(
+    S: float,
     K: float,
+    T: float,
     r: float,
-    dt: float,
-    p: float,
+    sigma: float,
+    q: float,
+    n_steps: int,
     option_type: int,
     exercise_style: int,
-) -> np.ndarray:
+) -> Tuple[float, float, float]:
     """
-    Compute option values via backward induction on a binomial tree.
-
-    Args:
-        asset_prices: Asset price tree
-        K: Strike price
-        r: Risk-free rate
-        dt: Time step size
-        p: Risk-neutral probability
-        option_type: OptionType.CALL or OptionType.PUT
-        exercise_style: ExerciseStyle.EUROPEAN or ExerciseStyle.AMERICAN
-
-    Returns:
-        Option value tree of same shape as asset_prices
+    Core Numba kernel for Binomial Tree.
+    
+    Uses O(N) memory by storing only the current layer of option values.
+    Computes Price, Delta, and Gamma in a single backward pass.
     """
-    n = asset_prices.shape[0] - 1
-    disc = np.exp(-r * dt)
-    option_values = np.empty_like(asset_prices)
+    # 1. Precompute parameters
+    dt = T / n_steps
+    u = np.exp(sigma * np.sqrt(dt))
+    d = 1.0 / u
+    df = np.exp(-r * dt)
+    
+    # Risk-neutral probability
+    # If sigma is very low or steps very high, drift can dominate. 
+    # Standard CRR clamping is applied.
+    drift = np.exp((r - q) * dt)
+    p = (drift - d) / (u - d)
+    if p < 0.0:
+        p = 0.0
+    elif p > 1.0:
+        p = 1.0
+    
+    # 2. Initialize terminal payoffs (Step N)
+    # We allocate ONE array of size N+1. This is O(N) memory.
+    values = np.empty(n_steps + 1, dtype=np.float64)
+    
+    # Pre-calculate asset prices at maturity to vectorise payoff calculation
+    # S_T[j] = S * u^j * d^(N-j)
+    # We can optimize this by noting S * d^N * (u/d)^j
+    u_over_d = u / d
+    s_d_N = S * (d ** n_steps)
+    
+    for j in range(n_steps + 1):
+        spot_price = s_d_N * (u_over_d ** j)
+        if option_type == 0:  # CALL
+            values[j] = max(spot_price - K, 0.0)
+        else:  # PUT
+            values[j] = max(K - spot_price, 0.0)
 
-    # Terminal payoffs
-    if option_type == OptionType.CALL:
-        option_values[-1, : n + 1] = np.maximum(asset_prices[-1, : n + 1] - K, 0)
-    else:
-        option_values[-1, : n + 1] = np.maximum(K - asset_prices[-1, : n + 1], 0)
+    # Variables to store option values at Step 2 and Step 1 for Greeks
+    # We capture them as we pass through those time steps.
+    # Indices for Greeks:
+    # Step 2: V[2] (uu), V[1] (ud), V[0] (dd)
+    # Step 1: V[1] (u), V[0] (d)
+    
+    val_2_2, val_2_1, val_2_0 = 0.0, 0.0, 0.0
+    val_1_1, val_1_0 = 0.0, 0.0
 
-    # Backward induction
-    for step in range(n - 1, -1, -1):
-        option_values[step, : step + 1] = disc * (
-            p * option_values[step + 1, 1 : step + 2]
-            + (1 - p) * option_values[step + 1, : step + 1]
-        )
-        # American early exercise
-        if exercise_style == ExerciseStyle.AMERICAN:
-            if option_type == OptionType.CALL:
-                intrinsic = np.maximum(asset_prices[step, : step + 1] - K, 0)
+    # 3. Backward Induction
+    # Loop from N-1 down to 0
+    for i in range(n_steps - 1, -1, -1):
+        
+        # At step i, we compute values[0..i]
+        # We assume d = 1/u for calculating node Spot Price
+        # Node (i, j): Spot = S * u^j * d^(i-j)
+        # Factor out S * d^i and multiply by (u/d)^j
+        current_s_d_i = S * (d ** i)
+        
+        for j in range(i + 1):
+            # Continuation Value
+            continuation = df * (p * values[j + 1] + (1 - p) * values[j])
+            
+            # Exercise Value (if American)
+            if exercise_style == 1:  # AMERICAN
+                spot_price = current_s_d_i * (u_over_d ** j)
+                if option_type == 0: # CALL
+                    intrinsic = max(spot_price - K, 0.0)
+                else: # PUT
+                    intrinsic = max(K - spot_price, 0.0)
+                values[j] = max(continuation, intrinsic)
             else:
-                intrinsic = np.maximum(K - asset_prices[step, : step + 1], 0)
-            option_values[step, : step + 1] = np.maximum(
-                option_values[step, : step + 1], intrinsic
-            )
+                values[j] = continuation
+        
+        # Capture values for Greeks
+        if i == 2:
+            val_2_0 = values[0] # dd
+            val_2_1 = values[1] # ud
+            val_2_2 = values[2] # uu
+        elif i == 1:
+            val_1_0 = values[0] # d
+            val_1_1 = values[1] # u
 
-    return option_values
+    # 4. Extract Results
+    price = values[0]
+    
+    # Delta (Standard CRR approximation at t=0)
+    # Delta = (V_u - V_d) / (S_u - S_d)
+    s_u = S * u
+    s_d = S * d
+    delta = (val_1_1 - val_1_0) / (s_u - s_d)
+    
+    # Gamma
+    # Gamma = ( (V_uu - V_ud)/(S_uu - S_ud) - (V_ud - V_dd)/(S_ud - S_dd) ) / (0.5 * (S_uu - S_dd))
+    s_uu = S * u * u
+    s_ud = S # u*d = 1
+    s_dd = S * d * d
+    
+    numerator_1 = (val_2_2 - val_2_1) / (s_uu - s_ud)
+    numerator_2 = (val_2_1 - val_2_0) / (s_ud - s_dd)
+    gamma = (numerator_1 - numerator_2) / (0.5 * (s_uu - s_dd))
+    
+    return price, delta, gamma
 
 
 class BinomialTree:
     """
-    CRR Binomial Tree option pricer.
-
-    Features:
-    - European & American options
-    - Vectorized Numba acceleration
-    - Numerical safeguards
-    - Delta & Gamma calculation
-    - Error handling
+    Production-grade CRR Binomial Tree pricer.
+    
+    Optimizations:
+    - O(N) memory complexity (reusing 1D array)
+    - Single-pass calculation for Price, Delta, and Gamma
+    - Numba JIT compilation
+    - Analytical Greeks (no finite difference re-runs)
     """
 
-    def __init__(self, num_steps: int = 500):
+    def __init__(self, num_steps: int = 200):
         """
-        Initialize the pricer.
-
         Args:
-            num_steps: Number of steps in the binomial tree
+            num_steps: Depth of the tree. 200 is usually sufficient for high accuracy.
+                       Values > 2000 may degrade performance.
         """
         if num_steps <= 0:
             raise InputValidationError("num_steps must be positive integer")
@@ -163,22 +196,6 @@ class BinomialTree:
         exercise_style: Literal["european", "american"],
         q: float,
     ) -> Tuple[int, int]:
-        """
-        Validate input parameters and convert to enums.
-
-        Returns:
-            Tuple of integers: (OptionType, ExerciseStyle)
-        """
-        for param, name in [
-            (S, "S"),
-            (K, "K"),
-            (T, "T"),
-            (r, "r"),
-            (sigma, "sigma"),
-            (q, "q"),
-        ]:
-            if not isinstance(param, (int, float, np.floating)):
-                raise InputValidationError(f"{name} must be numeric, got {type(param)}")
         if option_type not in {"call", "put"}:
             raise InputValidationError("option_type must be 'call' or 'put'")
         if exercise_style not in {"european", "american"}:
@@ -189,26 +206,10 @@ class BinomialTree:
             raise InputValidationError("Spot/strike must be positive")
         if T < 0 or sigma < 0 or q < 0:
             raise InputValidationError("T/sigma/q must be non-negative")
-        return (
-            OptionType[option_type.upper()].value,
-            ExerciseStyle[exercise_style.upper()].value,
-        )
-
-    def _compute_params(
-        self, S: float, K: float, T: float, r: float, sigma: float, q: float
-    ) -> Tuple[float, float, float, float]:
-        """
-        Compute the tree parameters: u, d, p, dt.
-
-        Returns:
-            Tuple: (u, d, p, dt)
-        """
-        dt = T / self.num_steps
-        u = np.exp(sigma * np.sqrt(dt))
-        d = 1.0 / u
-        p = (np.exp((r - q) * dt) - d) / (u - d)
-        p = min(max(p, 0.0), 1.0)  # Clamp probability
-        return u, d, p, dt
+            
+        ot_enum = OptionType.CALL.value if option_type == "call" else OptionType.PUT.value
+        es_enum = ExerciseStyle.EUROPEAN.value if exercise_style == "european" else ExerciseStyle.AMERICAN.value
+        return ot_enum, es_enum
 
     @error_handler
     def price(
@@ -222,84 +223,66 @@ class BinomialTree:
         exercise_style: Literal["european", "american"] = "european",
         q: float = 0.0,
     ) -> float:
-        """
-        Compute option price.
-
-        Args:
-            S: Spot price
-            K: Strike price
-            T: Time to maturity in years
-            r: Risk-free rate
-            sigma: Volatility
-            option_type: "call" or "put"
-            exercise_style: "european" or "american"
-            q: Dividend yield
-
-        Returns:
-            Option price
-        """
-        if T == 0:
+        """Computes option price."""
+        if T <= 1e-6:
             return max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
-        if sigma == 0:
-            df = np.exp(-r * T)
-            fwd = S * np.exp((r - q) * T)
-            intrinsic = (
-                max(fwd - K, 0.0) if option_type == "call" else max(K - fwd, 0.0)
-            )
-            return intrinsic * df
-        ot, es = self._validate_inputs(
-            S, K, T, r, sigma, option_type, exercise_style, q
+
+        ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
+        
+        # The kernel returns (price, delta, gamma). We only return price.
+        # Numba is fast enough that re-running this is negligible compared to
+        # the overhead of finite differences, but explicit caching could be added if needed.
+        price, _, _ = _solve_binomial_tree(
+            S, K, T, r, sigma, q, self.num_steps, ot, es
         )
-        u, d, p, dt = self._compute_params(S, K, T, r, sigma, q)
-        asset_prices = _compute_asset_prices(S, u, d, self.num_steps)
-        option_values = _backward_induction(asset_prices, K, r, dt, p, ot, es)
-        return option_values[0, 0]
+        return price
 
     @error_handler
     def delta(
         self,
-        S,
-        K,
-        T,
-        r,
-        sigma,
-        option_type,
-        exercise_style="european",
-        q=0.0,
-        h: Optional[float] = None,
+        S: float, K: float, T: float, r: float, sigma: float,
+        option_type: Literal["call", "put"],
+        exercise_style: Literal["european", "american"] = "european",
+        q: float = 0.0,
     ) -> float:
-        """
-        Compute option delta using central finite difference.
-
-        Args:
-            h: Price bump for numerical derivative
-        """
-        h = h or max(S * 1e-4, 1e-6)
-        price_up = self.price(S + h, K, T, r, sigma, option_type, exercise_style, q)
-        price_down = self.price(S - h, K, T, r, sigma, option_type, exercise_style, q)
-        return (price_up - price_down) / (2 * h)
+        """Computes Delta analytically from the tree."""
+        if T <= 1e-6: return 0.0 # Approximation at maturity
+        
+        ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
+        _, delta, _ = _solve_binomial_tree(S, K, T, r, sigma, q, self.num_steps, ot, es)
+        return delta
 
     @error_handler
     def gamma(
         self,
-        S,
-        K,
-        T,
-        r,
-        sigma,
-        option_type,
-        exercise_style="european",
+        S: float, K: float, T: float, r: float, sigma: float,
+        option_type: Literal["call", "put"],
+        exercise_style: Literal["european", "american"] = "european",
         q: float = 0.0,
-        h: Optional[float] = None,
     ) -> float:
-        """
-        Compute option gamma using central finite difference.
+        """Computes Gamma analytically from the tree."""
+        if T <= 1e-6: return 0.0
+        
+        ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
+        _, _, gamma = _solve_binomial_tree(S, K, T, r, sigma, q, self.num_steps, ot, es)
+        return gamma
 
-        Args:
-            h: Price bump for numerical derivative
+    @error_handler
+    def calculate_all(
+        self,
+        S: float, K: float, T: float, r: float, sigma: float,
+        option_type: Literal["call", "put"],
+        exercise_style: Literal["european", "american"] = "european",
+        q: float = 0.0,
+    ) -> dict:
         """
-        h = h or max(S * 1e-4, 1e-6)
-        price_up = self.price(S + h, K, T, r, sigma, option_type, exercise_style, q)
-        price_mid = self.price(S, K, T, r, sigma, option_type, exercise_style, q)
-        price_down = self.price(S - h, K, T, r, sigma, option_type, exercise_style, q)
-        return (price_up - 2 * price_mid + price_down) / (h * h)
+        Compute Price, Delta, and Gamma efficiently in a single run.
+        Useful for dashboards to avoid re-running the model 3 times.
+        """
+        if T <= 1e-6:
+            p = max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
+            return {"price": p, "delta": 0.0, "gamma": 0.0}
+
+        ot, es = self._validate_inputs(S, K, T, r, sigma, option_type, exercise_style, q)
+        price, delta, gamma = _solve_binomial_tree(S, K, T, r, sigma, q, self.num_steps, ot, es)
+        return {"price": price, "delta": delta, "gamma": gamma}

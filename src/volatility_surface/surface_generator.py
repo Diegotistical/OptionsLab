@@ -11,7 +11,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from numba import njit
 from scipy.interpolate import griddata
 
-# Try to import CuPy for optional GPU acceleration
+# Try to import CuPy for optional GPU acceleration (only nvidia GPUs supported)
 try:
     import cupy as cp
 

@@ -2,7 +2,7 @@
 
 import numpy as np
 import pandas as pd
-from monte_carlo import MonteCarloPricer
+from src.pricing_models.monte_carlo import MonteCarloPricer
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.pipeline import Pipeline
