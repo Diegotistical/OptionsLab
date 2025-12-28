@@ -9,9 +9,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # --- 1. Robust Path Setup ---
-# Automatically finds the 'src' folder regardless of this file's depth
 current_file = Path(__file__).resolve()
-project_root = current_file.parents[2]  # Adjusts to OptionsLab root
+project_root = current_file.parents[2]
 src_path = project_root / "src"
 
 if str(project_root) not in sys.path:
@@ -21,18 +20,13 @@ if str(src_path) not in sys.path:
 
 # --- 2. Backend Import Strategy ---
 try:
-    from pricing_models.binomial_tree import BinomialTree, ExerciseStyle, OptionType
+    from pricing_models.binomial_tree import BinomialTree
     BACKEND_AVAILABLE = True
-except ImportError as e:
+except ImportError:
     BACKEND_AVAILABLE = False
-    IMPORT_ERROR = str(e)
 
-# --- 3. Pure Python Fallback (For "Disable Numba" Benchmarking) ---
+# --- 3. Pure Python Fallback ---
 def pure_python_binomial_pricer(S, K, T, r, sigma, q, n, option_type, exercise_style):
-    """
-    Slow, pure-Python implementation to demonstrate the speed difference
-    when Numba acceleration is disabled.
-    """
     dt = T / n
     u = math.exp(sigma * math.sqrt(dt))
     d = 1.0 / u
@@ -41,23 +35,25 @@ def pure_python_binomial_pricer(S, K, T, r, sigma, q, n, option_type, exercise_s
     p = (drift - d) / (u - d)
     p = max(0.0, min(1.0, p))
 
-    # Initialize leaves
     values = [0.0] * (n + 1)
+    is_call = (option_type == "call")
+    
+    # Initialize Terminal Leaves
     for j in range(n + 1):
         spot = S * (d ** (n - j)) * (u ** j)
-        if "call" in option_type:
+        if is_call:
             values[j] = max(spot - K, 0.0)
         else:
             values[j] = max(K - spot, 0.0)
 
-    # Backward induction
+    # Backward Induction
     for i in range(n - 1, -1, -1):
         for j in range(i + 1):
             continuation = df * (p * values[j + 1] + (1 - p) * values[j])
             
-            if "american" in exercise_style:
+            if exercise_style == "american":
                 spot = S * (d ** (i - j)) * (u ** j)
-                if "call" in option_type:
+                if is_call:
                     intrinsic = max(spot - K, 0.0)
                 else:
                     intrinsic = max(K - spot, 0.0)
@@ -67,283 +63,167 @@ def pure_python_binomial_pricer(S, K, T, r, sigma, q, n, option_type, exercise_s
                 
     return values[0]
 
-# --- 4. Page Configuration & CSS ---
+# --- 4. Page Config & CSS ---
 st.set_page_config(page_title="Binomial Tree Pricing", page_icon="🌳", layout="wide")
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-    /* Global Spacing */
-    .main .block-container { padding-top: 2rem; padding-bottom: 2rem; }
-    
-    /* Custom Card Styling */
-    .metric-card {
-        background-color: #262730;
-        border: 1px solid #464b59;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        margin-bottom: 1rem;
+    .main .block-container { padding-top: 2rem; }
+    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
+    .metric-container {
+        background: #1E1E1E; padding: 20px; border-radius: 12px;
+        border: 1px solid #333; margin-top: 10px;
     }
-    
-    /* Performance Badge */
-    .badge-fast {
-        background-color: #00cc96;
-        color: #000;
-        padding: 4px 12px;
-        border-radius: 16px;
-        font-weight: 700;
-        font-size: 0.85rem;
-        display: inline-block;
+    .input-card {
+        background: #262730; padding: 20px; border-radius: 10px; margin-bottom: 20px;
     }
-    .badge-slow {
-        background-color: #ef553b;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 16px;
-        font-weight: 700;
-        font-size: 0.85rem;
-        display: inline-block;
+    .badge {
+        padding: 4px 10px; border-radius: 4px; font-weight: bold; font-size: 0.8em;
     }
-
-    /* Slider Color */
-    .stSlider > div > div > div > div { background: #ff4b4b; }
+    .badge-on { background: #00cc96; color: black; }
+    .badge-off { background: #ff4b4b; color: white; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-if not BACKEND_AVAILABLE:
-    st.error("❌ Critical Error: Backend Not Found")
-    st.info(f"Could not import `BinomialTree`. Python path includes: {src_path}")
-    st.code(IMPORT_ERROR)
-    st.stop()
-
-# --- 5. UI Layout ---
-
-# Title Section
-col_title, col_badge = st.columns([3, 1])
-with col_title:
+# --- 5. Main Layout ---
+col_head, col_stat = st.columns([3, 1])
+with col_head:
     st.title("🌳 Binomial Tree Pricing")
     st.caption("Production-Grade CRR Model • O(N) Memory • Analytical Greeks")
 
-# Sidebar Configuration
-st.sidebar.header("⚙️ Pricing Parameters")
+# --- CONTROL PANEL (Replaces Sidebar) ---
+with st.container():
+    st.markdown("### ⚙️ Control Panel")
+    with st.expander("Show Pricing Inputs", expanded=True):
+        # Row 1: Market Data
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: S = st.number_input("Spot Price ($)", 1.0, 10000.0, 100.0)
+        with c2: K = st.number_input("Strike Price ($)", 1.0, 10000.0, 100.0)
+        with c3: r = st.number_input("Risk-Free Rate (%)", 0.0, 100.0, 5.0) / 100
+        with c4: sigma = st.number_input("Volatility (%)", 1.0, 500.0, 20.0) / 100
 
-# Sidebar Inputs
-with st.sidebar:
-    st.subheader("Asset & Market")
-    S = st.number_input("Spot Price (S)", 0.1, 10000.0, 100.0, 1.0)
-    K = st.number_input("Strike Price (K)", 0.1, 10000.0, 100.0, 1.0)
-    r = st.number_input("Risk-Free Rate (%)", 0.0, 100.0, 5.0, 0.1) / 100
-    q = st.number_input("Dividend Yield (%)", 0.0, 100.0, 0.0, 0.1) / 100
-    
-    st.subheader("Option Properties")
-    sigma = st.number_input("Volatility (%)", 0.1, 500.0, 20.0, 1.0) / 100
-    T = st.number_input("Time to Maturity (Yrs)", 0.01, 10.0, 1.0, 0.1)
-    
-    col_type, col_style = st.columns(2)
-    with col_type:
-        option_type = st.selectbox("Type", ["Call", "Put"])
-    with col_style:
-        exercise_style = st.selectbox("Style", ["European", "American"])
+        # Row 2: Option Properties
+        c5, c6, c7, c8 = st.columns(4)
+        with c5: T = st.number_input("Maturity (Years)", 0.01, 10.0, 1.0)
+        with c6: q = st.number_input("Dividend Yield (%)", 0.0, 100.0, 0.0) / 100
+        with c7: 
+            # STRICT INPUTS: We define exactly what the strings are here
+            option_type = st.selectbox("Option Type", ["Call", "Put"]) 
+        with c8: 
+            exercise_style = st.selectbox("Exercise Style", ["European", "American"])
 
-    st.markdown("---")
-    st.subheader("🔧 Engine Settings")
-    num_steps = st.slider("Lattice Steps (N)", 10, 2500, 200, 10)
-    
-    use_numba = st.toggle("🚀 Enable Numba Acceleration", value=True)
-    
-    with st.expander("Visualization & Analytics", expanded=False):
-        show_tree = st.checkbox("Show Tree Diagram", value=True)
-        calculate_greeks = st.checkbox("Calculate Greeks", value=True)
-        convergence_analysis = st.checkbox("Run Convergence Test", value=False)
+        # Row 3: Engine Settings
+        st.markdown("---")
+        c9, c10 = st.columns([1, 1])
+        with c9:
+            num_steps = st.slider("Lattice Steps (N)", 10, 2500, 200, 10)
+        with c10:
+            st.write("") # Spacer
+            use_numba = st.checkbox("🚀 Enable Numba Acceleration", value=True)
+            show_tree = st.checkbox("Visualize Tree", value=False)
 
-# --- 6. Main Calculation Engine ---
-
-# Display Current Engine Status in Top Right
-with col_badge:
-    st.write("") # Spacer
+# Update Status Badge
+with col_stat:
+    st.write("")
     if use_numba:
-        st.markdown('<div style="text-align: right;"><span class="badge-fast">⚡ Numba Active</span></div>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-on">⚡ Numba Active</span>', unsafe_allow_html=True)
     else:
-        st.markdown('<div style="text-align: right;"><span class="badge-slow">🐌 Pure Python</span></div>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-off">🐌 Python Mode</span>', unsafe_allow_html=True)
 
-if st.button("Calculate Option Price", type="primary", use_container_width=True):
+# --- 6. Execution & Results ---
+if st.button("Calculate Option Price", type="primary"):
+    
+    # 1. Prepare Inputs for Backend (LowerCase)
+    opt_lower = "call" if option_type == "Call" else "put"
+    style_lower = "european" if exercise_style == "European" else "american"
+    
+    start_t = time.time()
+    
+    # 2. Run Model
     try:
-        # 1. Normalize Inputs (Robust String Handling)
-        opt_clean = str(option_type).lower().strip()
-        ex_clean = str(exercise_style).lower().strip()
-        
-        start_time = time.time()
-        
-        # 2. Execution Logic
-        if use_numba:
-            # -- FAST PATH --
+        if use_numba and BACKEND_AVAILABLE:
             bt = BinomialTree(num_steps=num_steps)
-            if calculate_greeks and hasattr(bt, "calculate_all"):
-                results = bt.calculate_all(S, K, T, r, sigma, opt_clean, ex_clean, q)
-                price = results["price"]
-                delta = results["delta"]
-                gamma = results["gamma"]
+            # Try/Catch for calculate_all existence
+            if hasattr(bt, "calculate_all"):
+                res = bt.calculate_all(S, K, T, r, sigma, opt_lower, style_lower, q)
+                price, delta, gamma = res["price"], res["delta"], res["gamma"]
             else:
-                price = bt.price(S, K, T, r, sigma, opt_clean, ex_clean, q)
+                price = bt.price(S, K, T, r, sigma, opt_lower, style_lower, q)
                 delta, gamma = 0.0, 0.0
         else:
-            # -- SLOW PATH --
-            price = pure_python_binomial_pricer(S, K, T, r, sigma, q, num_steps, opt_clean, ex_clean)
+            price = pure_python_binomial_pricer(S, K, T, r, sigma, q, num_steps, opt_lower, style_lower)
             delta, gamma = 0.0, 0.0
             
-        end_time = time.time()
-        calc_time_ms = (end_time - start_time) * 1000
-
-        # 3. Robust Intrinsic Value Calculation
-        # Explicitly casting to float to prevent any TypeErrors
-        if "call" in opt_clean:
-            intrinsic_val = max(float(S) - float(K), 0.0)
-        else:
-            intrinsic_val = max(float(K) - float(S), 0.0)
-            
-        time_val = max(float(price) - intrinsic_val, 0.0)
-        moneyness = "ITM" if intrinsic_val > 0 else "ATM" if intrinsic_val == 0 else "OTM"
-
-        # --- 7. Results Display ---
-        
-        # Row 1: Key Metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Option Price", f"${price:.4f}", help="Theoretical Fair Value")
-        m2.metric("Intrinsic Value", f"${intrinsic_val:.4f}", help="Value if exercised immediately")
-        m3.metric("Time Value", f"${time_val:.4f}", help="Premium paid for uncertainty")
-        m4.metric("Moneyness", moneyness, delta_color="off")
-
-        # Row 2: Performance & Engine Stats (Custom Card)
-        st.markdown(f"""
-        <div class="metric-card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <h4 style="margin: 0; color: #aaa;">Engine Performance</h4>
-                    <p style="font-size: 1.5rem; font-weight: bold; margin: 0;">{calc_time_ms:.2f} ms</p>
-                    <p style="font-size: 0.8rem; color: #666;">Time to compute {num_steps} steps</p>
-                </div>
-                <div style="text-align: right; border-left: 1px solid #444; padding-left: 20px;">
-                    <p style="margin: 2px;">Steps/ms: <b>{num_steps / calc_time_ms if calc_time_ms > 0 else 0:.1f}</b></p>
-                    <p style="margin: 2px;">Virtual Nodes: <b>{((num_steps + 1) * (num_steps + 2)) // 2:,}</b></p>
-                    <p style="margin: 2px;">Memory: <b>O(N)</b></p>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Row 3: Greeks (Conditional)
-        if calculate_greeks and use_numba:
-            st.subheader("📊 Option Greeks")
-            g1, g2, g3 = st.columns(3)
-            g1.metric("Delta (Δ)", f"{delta:.4f}", help="Sensitivity to Spot Price")
-            g2.metric("Gamma (Γ)", f"{gamma:.4f}", help="Sensitivity of Delta")
-            g3.info("Analytical Greeks calculated during backward induction pass.")
-        elif calculate_greeks and not use_numba:
-            st.warning("⚠️ Analytical Greeks are only available in Numba Accelerated mode.")
-
-        # --- 8. Visualizations ---
-        
-        # Tabbed Interface for Charts
-        tab_tree, tab_conv, tab_dist = st.tabs(["🌿 Lattice Tree", "📈 Convergence", "🔔 Probability"])
-        
-        with tab_tree:
-            if show_tree and num_steps >= 5:
-                viz_steps = min(5, num_steps)
-                dt = T / viz_steps
-                u = np.exp(sigma * np.sqrt(dt))
-                d = 1.0 / u
-                
-                # Build light visualization tree
-                tree_data = []
-                for i in range(viz_steps + 1):
-                    for j in range(i + 1):
-                        p_node = S * (u**j) * (d**(i-j))
-                        tree_data.append({"step": i, "node": j, "price": p_node})
-                df_tree = pd.DataFrame(tree_data)
-
-                fig = go.Figure()
-                
-                # Draw Edges
-                for i in range(viz_steps):
-                    curr_layer = df_tree[df_tree["step"] == i]
-                    next_layer = df_tree[df_tree["step"] == i + 1]
-                    for _, node in curr_layer.iterrows():
-                        up = next_layer[next_layer["node"] == node["node"] + 1]
-                        dn = next_layer[next_layer["node"] == node["node"]]
-                        
-                        if not up.empty:
-                            fig.add_trace(go.Scatter(
-                                x=[i, i+1], y=[node["price"], up.iloc[0]["price"]],
-                                mode="lines", line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False
-                            ))
-                        if not dn.empty:
-                            fig.add_trace(go.Scatter(
-                                x=[i, i+1], y=[node["price"], dn.iloc[0]["price"]],
-                                mode="lines", line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False
-                            ))
-                
-                # Draw Nodes
-                for s in range(viz_steps + 1):
-                    nodes = df_tree[df_tree["step"] == s]
-                    fig.add_trace(go.Scatter(
-                        x=nodes["step"], y=nodes["price"],
-                        mode="markers+text", marker=dict(size=24, color="#ff4b4b"),
-                        text=nodes["price"].round(2), textfont=dict(color="white", size=10),
-                        name=f"Step {s}"
-                    ))
-                    
-                fig.update_layout(
-                    title=f"Binomial Lattice (First {viz_steps} Steps)",
-                    template="plotly_dark", height=450,
-                    xaxis=dict(title="Time Steps", showgrid=False),
-                    yaxis=dict(title="Asset Price", showgrid=True)
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Tree visualization disabled or steps too low.")
-
-        with tab_conv:
-            if convergence_analysis:
-                st.write("Analyzing price stability as N increases...")
-                conv_steps = sorted(list(set([10, 50, 100, 200, 500, num_steps])))
-                conv_res = []
-                
-                # Progress bar for analysis
-                prog_bar = st.progress(0)
-                for i, n in enumerate(conv_steps):
-                    bt_temp = BinomialTree(num_steps=n)
-                    p_temp = bt_temp.price(S, K, T, r, sigma, opt_clean, ex_clean, q)
-                    conv_res.append(p_temp)
-                    prog_bar.progress((i + 1) / len(conv_steps))
-                
-                fig_conv = go.Figure()
-                fig_conv.add_trace(go.Scatter(
-                    x=conv_steps, y=conv_res, mode='lines+markers',
-                    name='Price', line=dict(color='#00cc96', width=3)
-                ))
-                fig_conv.add_hline(y=price, line_dash="dash", annotation_text="Final Price")
-                fig_conv.update_layout(title="Convergence Analysis", template="plotly_dark", height=400)
-                st.plotly_chart(fig_conv, use_container_width=True)
-            else:
-                st.info("Enable 'Run Convergence Test' in the sidebar to view this chart.")
-
-        with tab_dist:
-            # Quick Log-Normal Distribution visualization
-            st.write("Risk-Neutral Terminal Price Distribution")
-            
-            x = np.linspace(S*0.4, S*1.6, 200)
-            mu = np.log(S) + (r - q - 0.5 * sigma**2) * T
-            pdf = (1 / (x * sigma * np.sqrt(T) * np.sqrt(2 * np.pi))) * np.exp(-(np.log(x) - mu)**2 / (2 * sigma**2 * T))
-            
-            fig_dist = go.Figure()
-            fig_dist.add_trace(go.Scatter(x=x, y=pdf, fill='tozeroy', name='PDF', line=dict(color='#ab63fa')))
-            fig_dist.add_vline(x=K, line_dash="dash", line_color="white", annotation_text=f"Strike ${K}")
-            fig_dist.update_layout(template="plotly_dark", height=400, xaxis_title="Price at Maturity")
-            st.plotly_chart(fig_dist, use_container_width=True)
-
     except Exception as e:
-        st.error("An unexpected error occurred during calculation.")
-        st.exception(e)
+        st.error(f"Calculation Error: {e}")
+        st.stop()
+        
+    calc_time = (time.time() - start_t) * 1000
+
+    # 3. FIXED INTRINSIC VALUE LOGIC (Determinisitic)
+    # We rely on the exact variable from the dropdown, not string matching
+    if option_type == "Call":
+        intrinsic_val = max(S - K, 0.0)
+    else:
+        intrinsic_val = max(K - S, 0.0)
+        
+    time_val = max(price - intrinsic_val, 0.0)
+    moneyness = "ITM" if intrinsic_val > 0 else "ATM" if intrinsic_val == 0 else "OTM"
+
+    # 4. Display Results
+    st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Option Price", f"${price:.4f}")
+    m2.metric("Intrinsic Value", f"${intrinsic_val:.4f}", help="Value if exercised now")
+    m3.metric("Time Value", f"${time_val:.4f}")
+    m4.metric("Moneyness", moneyness)
+    
+    if use_numba and BACKEND_AVAILABLE:
+        st.markdown("---")
+        g1, g2, g3 = st.columns(3)
+        g1.metric("Delta (Δ)", f"{delta:.4f}")
+        g2.metric("Gamma (Γ)", f"{gamma:.4f}")
+        g3.caption(f"⏱️ Calc Time: {calc_time:.2f} ms")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 5. Visualization (Tree)
+    if show_tree and num_steps <= 20: # Limit to 20 for visual sanity
+        st.subheader("Tree Visualization")
+        viz_steps = min(5, num_steps)
+        dt = T / viz_steps
+        u = np.exp(sigma * np.sqrt(dt))
+        d = 1.0 / u
+        
+        tree_data = []
+        for i in range(viz_steps + 1):
+            for j in range(i + 1):
+                p_node = S * (u**j) * (d**(i-j))
+                tree_data.append({"step": i, "node": j, "price": p_node})
+        df_tree = pd.DataFrame(tree_data)
+
+        fig = go.Figure()
+        for s in range(viz_steps + 1):
+            nodes = df_tree[df_tree["step"] == s]
+            fig.add_trace(go.Scatter(
+                x=nodes["step"], y=nodes["price"],
+                mode="markers+text", marker=dict(size=18, color="#00cc96"),
+                text=nodes["price"].round(1), textposition="top center",
+                name=f"Step {s}"
+            ))
+        
+        # Draw connections
+        for i in range(viz_steps):
+            curr = df_tree[df_tree["step"] == i]
+            nex = df_tree[df_tree["step"] == i+1]
+            for _, n in curr.iterrows():
+                up = nex[nex["node"] == n["node"] + 1]
+                dn = nex[nex["node"] == n["node"]]
+                if not up.empty:
+                    fig.add_trace(go.Scatter(x=[i, i+1], y=[n["price"], up.iloc[0]["price"]], mode="lines", line=dict(color="gray", width=1), showlegend=False))
+                if not dn.empty:
+                    fig.add_trace(go.Scatter(x=[i, i+1], y=[n["price"], dn.iloc[0]["price"]], mode="lines", line=dict(color="gray", width=1), showlegend=False))
+
+        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=20, r=20, t=30, b=20))
+        st.plotly_chart(fig, use_container_width=True)
+    elif show_tree:
+        st.warning("⚠️ Tree visualization disabled for steps > 20 to prevent browser lag.")
