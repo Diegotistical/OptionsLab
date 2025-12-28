@@ -1,4 +1,4 @@
-# tests / test_models.py
+# tests/test_models.py
 
 import os
 import tempfile
@@ -43,12 +43,14 @@ def test_svrmodel_train_predict_save_load(sample_data):
     assert preds.shape[0] == sample_data.shape[0]
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        paths = model.save_model(tmpdir)
-        assert os.path.exists(paths["model"])
-        assert os.path.exists(paths["scaler"])
+        model_path = os.path.join(tmpdir, "model.joblib")
+        scaler_path = os.path.join(tmpdir, "scaler.joblib")
+        model.save_model(model_path, scaler_path)
+        assert os.path.exists(model_path)
+        assert os.path.exists(scaler_path)
 
         model2 = SVRModel()
-        model2.load_model(paths["model"], paths["scaler"])
+        model2.load_model(model_path, scaler_path)
         preds2 = model2.predict_volatility(sample_data)
         np.testing.assert_allclose(preds, preds2, rtol=1e-5)
 
@@ -61,12 +63,14 @@ def test_mlpmodel_train_predict_save_load(sample_data):
     assert preds.shape[0] == sample_data.shape[0]
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        paths = model.save_model(tmpdir)
-        assert os.path.exists(paths["model"])
-        assert os.path.exists(paths["scaler"])
+        model_path = os.path.join(tmpdir, "model.pth")
+        scaler_path = os.path.join(tmpdir, "scaler.joblib")
+        model.save_model(model_path, scaler_path)
+        assert os.path.exists(model_path)
+        assert os.path.exists(scaler_path)
 
         model2 = MLPModel()
-        model2.load_model(paths["model"], paths["scaler"])
+        model2.load_model(model_path, scaler_path)
         preds2 = model2.predict_volatility(sample_data)
         np.testing.assert_allclose(preds, preds2, rtol=1e-4)
 

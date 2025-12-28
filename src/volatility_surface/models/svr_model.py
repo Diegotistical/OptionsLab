@@ -13,9 +13,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 
-from volatility_surface.base import VolatilityModelBase
-from volatility_surface.utils.arbitrage_utils import validate_domain
-from volatility_surface.utils.feature_engineering import engineer_features
+from src.volatility_surface.base import VolatilityModelBase
+from src.volatility_surface.utils.arbitrage_utils import validate_domain
+from src.volatility_surface.utils.feature_engineering import engineer_features
 
 
 class SVRModel(VolatilityModelBase):
