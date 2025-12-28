@@ -10,7 +10,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 # Add src to path
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 if SRC.exists():
     sys.path.insert(0, str(SRC))
