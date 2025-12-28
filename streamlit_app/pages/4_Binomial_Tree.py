@@ -129,7 +129,11 @@ if st.button("🎯 Calculate Price & Analyze", use_container_width=True):
         pricing_time = (time.time() - start_time) * 1000
 
         # Intrinsic & Time Value
-        intrinsic_value = max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
+        if option_type.lower() == "call":
+            intrinsic_value = max(S - K, 0.0)
+        else:
+            intrinsic_value = max(K - S, 0.0)
+
         time_value = max(price - intrinsic_value, 0.0)
 
         # Display Results
