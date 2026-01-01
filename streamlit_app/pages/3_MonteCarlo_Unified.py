@@ -34,199 +34,19 @@ def get_mc_unified_pricer(
     use_numba: bool = True,
     use_gpu: bool = False,
 ) -> Any:
-    """Robust import of MonteCarloPricerUni with fallback implementation"""
+    """Import MonteCarloPricerUni directly. No fallbacks."""
     try:
         # Try direct import from expected location
         from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni
-
         return MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
     except ImportError:
         try:
             # Try alternative import paths
             from pricing_models.monte_carlo_unified import MonteCarloPricerUni
-
             return MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
-        except ImportError:
-            logger.warning(
-                "MonteCarloPricerUni not available. Using fallback implementation."
-            )
-            return _create_fallback_pricer(num_sim, num_steps, seed, use_numba, use_gpu)
-
-
-def _create_fallback_pricer(
-    num_sim: int, num_steps: int, seed: int, use_numba: bool, use_gpu: bool
-) -> Any:
-    """Create a fallback Monte Carlo pricer when the real implementation is unavailable"""
-
-    class FallbackPricer:
-        def __init__(self, num_sim, num_steps, seed):
-            self.num_sim = num_sim
-            self.num_steps = num_steps
-            self.seed = seed
-            np.random.seed(seed)
-
-        def price(self, S, K, T, r, sigma, option_type, q=0.0):
-            """Simplified MC pricing implementation with proper validation"""
-            # Validate inputs
-            if S <= 0 or K <= 0 or T <= 0.001 or sigma <= 0.001:
-                return 0.0
-
-            # Generate paths
-            dt = T / self.num_steps
-            Z = np.random.standard_normal((self.num_sim, self.num_steps))
-            S_paths = np.zeros((self.num_sim, self.num_steps))
-            S_paths[:, 0] = S
-
-            for t in range(1, self.num_steps):
-                drift = (r - q - 0.5 * sigma**2) * dt
-                diffusion = sigma * np.sqrt(dt) * Z[:, t]
-                S_paths[:, t] = S_paths[:, t - 1] * np.exp(drift + diffusion)
-
-            # Calculate payoff
-            if option_type == "call":
-                payoff = np.maximum(S_paths[:, -1] - K, 0.0)
-            else:
-                payoff = np.maximum(K - S_paths[:, -1], 0.0)
-
-            return float(np.mean(np.exp(-r * T) * payoff))
-
-        def delta_gamma(self, S, K, T, r, sigma, option_type, q=0.0, h=None):
-            """Calculate delta and gamma using central differences with common random numbers"""
-            # Adaptive step size based on spot price
-            if h is None:
-                h = max(1e-4 * S, 1e-5)  # Scale with S but keep minimum value
-
-            # Temporarily increase simulations for more stable Greeks
-            num_sim_temp = max(self.num_sim, 100000)
-
-            # Generate random numbers ONCE and reuse for all three points
-            np.random.seed(self.seed + 1)
-            dt = T / self.num_steps
-            Z = np.random.standard_normal((num_sim_temp, self.num_steps))
-
-            # Generate paths for all three points
-            S_paths_up = np.zeros((num_sim_temp, self.num_steps))
-            S_paths_down = np.zeros((num_sim_temp, num_steps))
-            S_paths_mid = np.zeros((num_sim_temp, self.num_steps))
-
-            S_paths_up[:, 0] = S + h
-            S_paths_down[:, 0] = S - h
-            S_paths_mid[:, 0] = S
-
-            for t in range(1, self.num_steps):
-                drift = (r - q - 0.5 * sigma**2) * dt
-                diffusion = sigma * np.sqrt(dt) * Z[:, t]
-                S_paths_up[:, t] = S_paths_up[:, t - 1] * np.exp(drift + diffusion)
-                S_paths_down[:, t] = S_paths_down[:, t - 1] * np.exp(drift + diffusion)
-                S_paths_mid[:, t] = S_paths_mid[:, t - 1] * np.exp(drift + diffusion)
-
-            # Calculate payoffs
-            if option_type == "call":
-                payoff_up = np.maximum(S_paths_up[:, -1] - K, 0.0)
-                payoff_down = np.maximum(S_paths_down[:, -1] - K, 0.0)
-                payoff_mid = np.maximum(S_paths_mid[:, -1] - K, 0.0)
-            else:
-                payoff_up = np.maximum(K - S_paths_up[:, -1], 0.0)
-                payoff_down = np.maximum(K - S_paths_down[:, -1], 0.0)
-                payoff_mid = np.maximum(K - S_paths_mid[:, -1], 0.0)
-
-            # Calculate prices
-            price_up = float(np.mean(np.exp(-r * T) * payoff_up))
-            price_down = float(np.mean(np.exp(-r * T) * payoff_down))
-            price_mid = float(np.mean(np.exp(-r * T) * payoff_mid))
-
-            # Calculate delta and gamma
-            delta = (price_up - price_down) / (2 * h)
-            gamma = (price_up - 2 * price_mid + price_down) / (h**2)
-
-            # VALIDATION: Ensure delta is in proper range
-            if option_type == "call":
-                # Call delta must be between 0 and 1
-                if delta < 0:
-                    logger.warning(
-                        f"Negative delta ({delta}) for call option. Clamping to 0."
-                    )
-                    delta = 0.0
-                elif delta > 1:
-                    logger.warning(
-                        f"Delta ({delta}) > 1 for call option. Clamping to 1."
-                    )
-                    delta = 1.0
-            else:  # put
-                # Put delta must be between -1 and 0
-                if delta > 0:
-                    logger.warning(
-                        f"Positive delta ({delta}) for put option. Clamping to 0."
-                    )
-                    delta = 0.0
-                elif delta < -1:
-                    logger.warning(
-                        f"Delta ({delta}) < -1 for put option. Clamping to -1."
-                    )
-                    delta = -1.0
-
-            # VALIDATION: Gamma must be positive for both calls and puts
-            if gamma < 0:
-                logger.warning(f"Negative gamma ({gamma}) detected. Setting to 0.")
-                gamma = 0.0
-
-            return float(delta), float(gamma)
-
-        def price_batch(
-            self, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0
-        ):
-            """Vectorized pricing for multiple points at once"""
-            if isinstance(q_vals, (int, float)):
-                q_vals = np.full_like(S_vals, q_vals)
-
-            prices = np.zeros(len(S_vals))
-
-            for i in range(len(S_vals)):
-                prices[i] = self.price(
-                    S_vals[i],
-                    K_vals[i],
-                    T_vals[i],
-                    r_vals[i],
-                    sigma_vals[i],
-                    option_type,
-                    q_vals[i],
-                )
-
-            return prices
-
-        def delta_gamma_batch(
-            self,
-            S_vals,
-            K_vals,
-            T_vals,
-            r_vals,
-            sigma_vals,
-            option_type,
-            q_vals=0.0,
-            h=None,
-        ):
-            """Vectorized Greek calculation for multiple points at once"""
-            if isinstance(q_vals, (int, float)):
-                q_vals = np.full_like(S_vals, q_vals)
-
-            deltas = np.zeros(len(S_vals))
-            gammas = np.zeros(len(S_vals))
-
-            for i in range(len(S_vals)):
-                deltas[i], gammas[i] = self.delta_gamma(
-                    S_vals[i],
-                    K_vals[i],
-                    T_vals[i],
-                    r_vals[i],
-                    sigma_vals[i],
-                    option_type,
-                    q_vals[i],
-                    h,
-                )
-
-            return deltas, gammas
-
-    return FallbackPricer(num_sim, num_steps, seed)
+        except ImportError as e:
+            st.error(f"Critical Error: Could not import 'MonteCarloPricerUni'. Ensure the file exists in 'src/pricing_models/'. Details: {e}")
+            st.stop()
 
 
 def timeit_ms(fn, *args, **kwargs) -> tuple:
@@ -235,6 +55,59 @@ def timeit_ms(fn, *args, **kwargs) -> tuple:
     result = fn(*args, **kwargs)
     elapsed = (time.perf_counter() - start) * 1000.0
     return result, elapsed
+
+
+# ======================
+# BATCH WRAPPERS (Fix for missing methods in model)
+# ======================
+def run_price_batch(mc, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0):
+    """
+    Executes pricing in a loop using the model's single-item .price() method.
+    Replaces mc.price_batch() which is missing from the model.
+    """
+    if isinstance(q_vals, (int, float)):
+        q_vals = np.full_like(S_vals, q_vals)
+
+    n = len(S_vals)
+    prices = np.zeros(n)
+    
+    for i in range(n):
+        prices[i] = mc.price(
+            float(S_vals[i]), 
+            float(K_vals[i]), 
+            float(T_vals[i]), 
+            float(r_vals[i]), 
+            float(sigma_vals[i]), 
+            option_type, 
+            float(q_vals[i])
+        )
+    return prices
+
+def run_delta_gamma_batch(mc, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0):
+    """
+    Executes Greeks calculation in a loop using the model's single-item .delta_gamma() method.
+    Replaces mc.delta_gamma_batch() which is missing from the model.
+    """
+    if isinstance(q_vals, (int, float)):
+        q_vals = np.full_like(S_vals, q_vals)
+
+    n = len(S_vals)
+    deltas = np.zeros(n)
+    gammas = np.zeros(n)
+    
+    for i in range(n):
+        d, g = mc.delta_gamma(
+            float(S_vals[i]), 
+            float(K_vals[i]), 
+            float(T_vals[i]), 
+            float(r_vals[i]), 
+            float(sigma_vals[i]), 
+            option_type, 
+            float(q_vals[i])
+        )
+        deltas[i] = d
+        gammas[i] = g
+    return deltas, gammas
 
 
 # ======================
@@ -267,8 +140,9 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
         start_idx = batch_idx * batch_size
         end_idx = min((batch_idx + 1) * batch_size, total_points)
 
-        # Price batch
-        Z[start_idx:end_idx] = mc.price_batch(
+        # Price batch (using local wrapper instead of model method)
+        Z[start_idx:end_idx] = run_price_batch(
+            mc,
             S_flat[start_idx:end_idx],
             K_flat[start_idx:end_idx],
             T_flat[start_idx:end_idx],
@@ -278,8 +152,9 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
             q_flat[start_idx:end_idx],
         )
 
-        # Greeks batch
-        deltas, gammas = mc.delta_gamma_batch(
+        # Greeks batch (using local wrapper instead of model method)
+        deltas, gammas = run_delta_gamma_batch(
+            mc,
             S_flat[start_idx:end_idx],
             K_flat[start_idx:end_idx],
             T_flat[start_idx:end_idx],
@@ -856,7 +731,8 @@ if run:
             status_text.text("Monte Carlo engine initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Monte Carlo engine: {str(e)}")
-            mc = get_mc_unified_pricer(num_sim, num_steps, seed, use_numba, use_gpu)
+            st.error(f"Failed to initialize engine: {e}")
+            st.stop()
 
         # Calculate single option price
         status_text.text("Calculating option price...")
@@ -1083,9 +959,14 @@ if run:
             for size in sim_sizes:
                 try:
                     # Time the pricing with different simulation sizes
+                    # Note: We must create a new instance to change num_sim efficiently 
+                    # or update the existing one if mutable. For safety we re-init.
+                    # Since this is "YOUR model", we assume we can re-instantiate it.
+                    mc_perf = get_mc_unified_pricer(size, num_steps, seed, use_numba, use_gpu)
+                    
                     start = time.perf_counter()
-                    price = mc.price(S, K, T, r, sigma, option_type, q)
-                    delta_val, gamma_val = mc.delta_gamma(
+                    price = mc_perf.price(S, K, T, r, sigma, option_type, q)
+                    delta_val, gamma_val = mc_perf.delta_gamma(
                         S, K, T, r, sigma, option_type, q
                     )
                     elapsed = (time.perf_counter() - start) * 1000.0
