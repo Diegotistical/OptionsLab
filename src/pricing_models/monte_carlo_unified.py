@@ -4,12 +4,29 @@
 Ultra-fast, production-ready Monte Carlo pricer with Greeks and ML surrogate.
 
 Features:
-- Monte Carlo pricing for European options
+- DIRECT terminal simulation for European options (exact, no discretization bias)
+- Path-based simulation for path-dependent options (American, barriers, etc.)
 - Delta & Gamma Greeks via central differences with Common Random Numbers (CRN)
 - Optional Numba acceleration for CPU
 - Optional GPU acceleration (CuPy)
 - Thread-safe
 - Machine Learning surrogate for instant predictions
+
+IMPORTANT TECHNICAL NOTE:
+For European options under Black-Scholes, the terminal price distribution is known exactly:
+    S_T = S_0 * exp((r - q - 0.5*sigma^2)*T + sigma*sqrt(T)*Z)
+where Z ~ N(0,1)
+
+This means:
+- NO time discretization needed (zero Euler bias)
+- ONE timestep (not 100)
+- 100x faster computation
+- Pure sampling variance (interpretable)
+
+The path-based method is ONLY needed for:
+- American options (early exercise)
+- Path-dependent payoffs (barriers, Asians, lookbacks)
+- Model calibration with path features
 """
 
 import threading
@@ -53,7 +70,7 @@ class MonteCarloPricerUni:
 
     Attributes:
         num_simulations: Number of Monte Carlo paths per option
-        num_steps: Time discretization steps
+        num_steps: Time discretization steps (only for path-dependent options)
         rng: Random number generator
         use_numba: Enable Numba acceleration
         use_gpu: Enable GPU acceleration with CuPy
@@ -78,17 +95,84 @@ class MonteCarloPricerUni:
         self.use_gpu = use_gpu and GPU_AVAILABLE
         self._lock = threading.RLock()
 
-    def _simulate_terminal_prices(
+    def _simulate_terminal_direct(
         self, S_arr, T_arr, r_arr, sigma_arr, q_arr, seed: Optional[int] = None
     ) -> np.ndarray:
         """
-        Simulate terminal prices for multiple options using geometric Brownian motion.
+        Simulate terminal prices DIRECTLY using exact log-normal distribution.
+        
+        This is the CORRECT way to price European options under Black-Scholes:
+        - Zero discretization bias (exact)
+        - 100x faster than path simulation
+        - Pure sampling variance
+        
+        S_T = S_0 * exp((r - q - 0.5*sigma^2)*T + sigma*sqrt(T)*Z)
         
         Args:
             seed: If provided, uses a local RNG with this seed for Common Random Numbers (CRN).
         """
-        # Select RNG: Use a fresh local generator if seed is explicit (for CRN),
-        # otherwise use the instance's stateful RNG.
+        if seed is not None:
+            rng = np.random.default_rng(seed)
+        else:
+            rng = self.rng
+
+        n = len(S_arr)
+        
+        # Generate standard normals (only need ONE per path, not num_steps)
+        Z_cpu = rng.normal(size=(n, self.num_simulations))
+
+        if self.use_gpu:
+            Z = cp.asarray(Z_cpu)
+            Z_ant = -Z  # Antithetic variates
+            
+            S = cp.asarray(S_arr)[:, None]
+            T = cp.asarray(T_arr)[:, None]
+            r = cp.asarray(r_arr)[:, None]
+            sigma = cp.asarray(sigma_arr)[:, None]
+            q = cp.asarray(q_arr)[:, None]
+            
+            # Direct terminal simulation (exact distribution)
+            drift = (r - q - 0.5 * sigma**2) * T
+            diffusion = sigma * cp.sqrt(T)
+            
+            S_T_pos = S * cp.exp(drift + diffusion * Z)
+            S_T_neg = S * cp.exp(drift + diffusion * Z_ant)
+            
+            terminal_prices = cp.concatenate([S_T_pos, S_T_neg], axis=1)
+            return cp.asnumpy(terminal_prices)
+        else:
+            Z = Z_cpu
+            Z_ant = -Z
+            
+            S = np.array(S_arr)[:, None]
+            T = np.array(T_arr)[:, None]
+            r = np.array(r_arr)[:, None]
+            sigma = np.array(sigma_arr)[:, None]
+            q = np.array(q_arr)[:, None]
+            
+            # Direct terminal simulation (exact distribution)
+            drift = (r - q - 0.5 * sigma**2) * T
+            diffusion = sigma * np.sqrt(T)
+            
+            S_T_pos = S * np.exp(drift + diffusion * Z)
+            S_T_neg = S * np.exp(drift + diffusion * Z_ant)
+            
+            return np.concatenate([S_T_pos, S_T_neg], axis=1)
+
+    def _simulate_terminal_paths(
+        self, S_arr, T_arr, r_arr, sigma_arr, q_arr, seed: Optional[int] = None
+    ) -> np.ndarray:
+        """
+        Simulate terminal prices using path evolution (Euler-Maruyama discretization).
+        
+        WARNING: This introduces discretization bias for European options.
+        Only use this for:
+        - Path-dependent options (American, barriers, Asians)
+        - Model calibration requiring path features
+        - Benchmarking discretization error
+        
+        For European options, use _simulate_terminal_direct() instead.
+        """
         if seed is not None:
             rng = np.random.default_rng(seed)
         else:
@@ -101,8 +185,6 @@ class MonteCarloPricerUni:
         ] * dt[:, None]
         vol = np.array(sigma_arr)[:, None] * np.sqrt(dt[:, None])
 
-        # Generate standard normals
-        # We generate on CPU first to ensure consistent seeding behavior between CPU/GPU
         Z_cpu = rng.normal(size=(n, self.num_simulations, self.num_steps))
 
         if self.use_gpu:
@@ -143,9 +225,17 @@ class MonteCarloPricerUni:
         option_type: Literal["call", "put"],
         q: float = 0.0,
         seed: Optional[int] = None,
+        use_path_simulation: bool = False,
     ) -> float:
         """
         Price a European option via Monte Carlo simulation.
+        
+        Args:
+            use_path_simulation: If False (default), uses direct terminal simulation (FAST, EXACT)
+                                If True, uses path-based Euler discretization (SLOW, BIASED)
+                                
+        For European options, use_path_simulation=False is ALWAYS correct.
+        Only set to True for benchmarking discretization error or path-dependent extensions.
         """
         if S <= 0 or K <= 0 or T <= 0 or sigma < 0:
             raise InputValidationError("Inputs must be positive and T > 0")
@@ -153,14 +243,27 @@ class MonteCarloPricerUni:
             raise InputValidationError("option_type must be 'call' or 'put'")
 
         try:
-            terminal_prices = self._simulate_terminal_prices(
-                np.array([S]),
-                np.array([T]),
-                np.array([r]),
-                np.array([sigma]),
-                np.array([q]),
-                seed=seed
-            )[0]
+            if use_path_simulation:
+                # Path-based simulation (introduces discretization bias)
+                terminal_prices = self._simulate_terminal_paths(
+                    np.array([S]),
+                    np.array([T]),
+                    np.array([r]),
+                    np.array([sigma]),
+                    np.array([q]),
+                    seed=seed
+                )[0]
+            else:
+                # Direct terminal simulation (exact, no bias)
+                terminal_prices = self._simulate_terminal_direct(
+                    np.array([S]),
+                    np.array([T]),
+                    np.array([r]),
+                    np.array([sigma]),
+                    np.array([q]),
+                    seed=seed
+                )[0]
+            
             payoffs = (
                 np.maximum(terminal_prices - K, 0.0)
                 if option_type == "call"
@@ -176,16 +279,14 @@ class MonteCarloPricerUni:
         """
         Compute Delta and Gamma using central finite differences with Common Random Numbers (CRN).
         """
-        # CRN Strategy: Use the same seed for S-h, S, and S+h to reduce variance
         if seed is None:
-            # Generate a random seed from the instance RNG
             seed = int(self.rng.integers(0, 2**32 - 1))
 
         S_arr = np.array([S - h, S, S + h])
         
-        # Use consistent seed across all 3 price calculations
+        # Use direct terminal simulation for Greeks (exact, fast)
         prices = np.array(
-            [self.price(S_i, K, T, r, sigma, option_type, q, seed=seed) for S_i in S_arr]
+            [self.price(S_i, K, T, r, sigma, option_type, q, seed=seed, use_path_simulation=False) for S_i in S_arr]
         )
         
         delta = (prices[2] - prices[0]) / (2 * h)
@@ -201,11 +302,11 @@ class MonteCarloPricerUni:
         sigma_vals,
         option_type: Literal["call", "put"],
         q_vals=0.0,
+        use_path_simulation: bool = False,
     ) -> np.ndarray:
         """
         Vectorized pricing for multiple points at once.
         """
-        # Ensure q_vals is iterable or broadcast it
         if isinstance(q_vals, (int, float)):
              q_vals = np.full_like(S_vals, q_vals)
 
@@ -221,7 +322,8 @@ class MonteCarloPricerUni:
                     float(r_vals[i]), 
                     float(sigma_vals[i]), 
                     option_type, 
-                    float(q_vals[i])
+                    float(q_vals[i]),
+                    use_path_simulation=use_path_simulation
                 )
             except Exception as e:
                 print(f"Warning: Failed to price point {i}: {e}")
@@ -290,11 +392,10 @@ class MLSurrogate:
         for _, row in df.iterrows():
             S, K, T, r, sigma, q = row[["S", "K", "T", "r", "sigma", "q"]]
             
-            # Use a deterministic seed derived from S for training stability
-            # This ensures (S) and (S+h) use same paths during training generation
             row_seed = 42 + int(S) 
             
-            p = pricer.price(S, K, T, r, sigma, "call", q, seed=row_seed)
+            # Use direct terminal simulation (exact, fast)
+            p = pricer.price(S, K, T, r, sigma, "call", q, seed=row_seed, use_path_simulation=False)
             d, g = pricer.delta_gamma(S, K, T, r, sigma, "call", q, seed=row_seed)
             
             mc_prices.append(p)
