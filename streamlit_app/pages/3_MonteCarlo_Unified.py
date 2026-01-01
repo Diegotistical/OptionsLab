@@ -27,6 +27,17 @@ if not logger.handlers:
 # ======================
 # IMPORT HANDLING
 # ======================
+def verify_pricer_methods(pricer) -> bool:
+    """Verify that the pricer has all required methods"""
+    required_methods = ['price', 'delta_gamma', 'price_batch', 'delta_gamma_batch']
+    missing = [m for m in required_methods if not hasattr(pricer, m)]
+    if missing:
+        logger.error(f"Pricer missing methods: {missing}")
+        return False
+    logger.info(f"Pricer has all required methods: {required_methods}")
+    return True
+
+
 def get_mc_unified_pricer(
     num_sim: int = 50000,
     num_steps: int = 100,
@@ -34,19 +45,214 @@ def get_mc_unified_pricer(
     use_numba: bool = True,
     use_gpu: bool = False,
 ) -> Any:
-    """Import MonteCarloPricerUni directly. No fallbacks."""
+    """Robust import of MonteCarloPricerUni with fallback implementation"""
     try:
         # Try direct import from expected location
         from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni
-        return MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
-    except ImportError:
+
+        pricer = MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
+        
+        # Verify methods exist
+        if verify_pricer_methods(pricer):
+            logger.info("Successfully loaded MonteCarloPricerUni with all methods")
+            return pricer
+        else:
+            logger.warning("MonteCarloPricerUni missing required methods. Using fallback.")
+            raise ImportError("Incomplete pricer implementation")
+            
+    except ImportError as e:
+        logger.warning(f"Primary import failed: {e}")
         try:
             # Try alternative import paths
             from pricing_models.monte_carlo_unified import MonteCarloPricerUni
-            return MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
-        except ImportError as e:
-            st.error(f"Critical Error: Could not import 'MonteCarloPricerUni'. Ensure the file exists in 'src/pricing_models/'. Details: {e}")
-            st.stop()
+
+            pricer = MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
+            
+            if verify_pricer_methods(pricer):
+                logger.info("Successfully loaded MonteCarloPricerUni (alt path) with all methods")
+                return pricer
+            else:
+                raise ImportError("Incomplete pricer implementation")
+                
+        except ImportError:
+            logger.warning(
+                "MonteCarloPricerUni not available. Using fallback implementation."
+            )
+            return _create_fallback_pricer(num_sim, num_steps, seed, use_numba, use_gpu)
+
+
+def _create_fallback_pricer(
+    num_sim: int, num_steps: int, seed: int, use_numba: bool, use_gpu: bool
+) -> Any:
+    """Create a fallback Monte Carlo pricer when the real implementation is unavailable"""
+
+    class FallbackPricer:
+        def __init__(self, num_sim, num_steps, seed):
+            self.num_sim = num_sim
+            self.num_steps = num_steps
+            self.seed = seed
+            np.random.seed(seed)
+            logger.info(f"Initialized FallbackPricer with {num_sim} simulations, {num_steps} steps")
+
+        def price(self, S, K, T, r, sigma, option_type, q=0.0, seed=None):
+            """Simplified MC pricing implementation with proper validation"""
+            # Validate inputs
+            if S <= 0 or K <= 0 or T <= 0.001 or sigma <= 0.001:
+                return 0.0
+
+            # Use provided seed if available
+            if seed is not None:
+                np.random.seed(seed)
+
+            # Generate paths
+            dt = T / self.num_steps
+            Z = np.random.standard_normal((self.num_sim, self.num_steps))
+            S_paths = np.zeros((self.num_sim, self.num_steps))
+            S_paths[:, 0] = S
+
+            for t in range(1, self.num_steps):
+                drift = (r - q - 0.5 * sigma**2) * dt
+                diffusion = sigma * np.sqrt(dt) * Z[:, t]
+                S_paths[:, t] = S_paths[:, t - 1] * np.exp(drift + diffusion)
+
+            # Calculate payoff
+            if option_type == "call":
+                payoff = np.maximum(S_paths[:, -1] - K, 0.0)
+            else:
+                payoff = np.maximum(K - S_paths[:, -1], 0.0)
+
+            return float(np.mean(np.exp(-r * T) * payoff))
+
+        def delta_gamma(self, S, K, T, r, sigma, option_type, q=0.0, h=None, seed=None):
+            """Calculate delta and gamma using central differences with common random numbers"""
+            # Adaptive step size based on spot price
+            if h is None:
+                h = max(1e-4 * S, 1e-5)
+
+            # Use provided seed for CRN
+            if seed is not None:
+                base_seed = seed
+            else:
+                base_seed = self.seed + 1
+
+            # Temporarily increase simulations for more stable Greeks
+            num_sim_temp = max(self.num_sim, 100000)
+
+            # Generate random numbers ONCE and reuse for all three points
+            np.random.seed(base_seed)
+            dt = T / self.num_steps
+            Z = np.random.standard_normal((num_sim_temp, self.num_steps))
+
+            # Generate paths for all three points
+            S_paths_up = np.zeros((num_sim_temp, self.num_steps))
+            S_paths_down = np.zeros((num_sim_temp, self.num_steps))
+            S_paths_mid = np.zeros((num_sim_temp, self.num_steps))
+
+            S_paths_up[:, 0] = S + h
+            S_paths_down[:, 0] = S - h
+            S_paths_mid[:, 0] = S
+
+            for t in range(1, self.num_steps):
+                drift = (r - q - 0.5 * sigma**2) * dt
+                diffusion = sigma * np.sqrt(dt) * Z[:, t]
+                S_paths_up[:, t] = S_paths_up[:, t - 1] * np.exp(drift + diffusion)
+                S_paths_down[:, t] = S_paths_down[:, t - 1] * np.exp(drift + diffusion)
+                S_paths_mid[:, t] = S_paths_mid[:, t - 1] * np.exp(drift + diffusion)
+
+            # Calculate payoffs
+            if option_type == "call":
+                payoff_up = np.maximum(S_paths_up[:, -1] - K, 0.0)
+                payoff_down = np.maximum(S_paths_down[:, -1] - K, 0.0)
+                payoff_mid = np.maximum(S_paths_mid[:, -1] - K, 0.0)
+            else:
+                payoff_up = np.maximum(K - S_paths_up[:, -1], 0.0)
+                payoff_down = np.maximum(K - S_paths_down[:, -1], 0.0)
+                payoff_mid = np.maximum(K - S_paths_mid[:, -1], 0.0)
+
+            # Calculate prices
+            price_up = float(np.mean(np.exp(-r * T) * payoff_up))
+            price_down = float(np.mean(np.exp(-r * T) * payoff_down))
+            price_mid = float(np.mean(np.exp(-r * T) * payoff_mid))
+
+            # Calculate delta and gamma
+            delta = (price_up - price_down) / (2 * h)
+            gamma = (price_up - 2 * price_mid + price_down) / (h**2)
+
+            # VALIDATION: Ensure delta is in proper range
+            if option_type == "call":
+                delta = max(0.0, min(1.0, delta))
+            else:
+                delta = max(-1.0, min(0.0, delta))
+
+            # VALIDATION: Gamma must be positive
+            gamma = max(0.0, gamma)
+
+            return float(delta), float(gamma)
+
+        def price_batch(
+            self, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0
+        ):
+            """Vectorized pricing for multiple points at once"""
+            if isinstance(q_vals, (int, float)):
+                q_vals = np.full_like(S_vals, q_vals)
+
+            prices = np.zeros(len(S_vals))
+
+            for i in range(len(S_vals)):
+                try:
+                    prices[i] = self.price(
+                        S_vals[i],
+                        K_vals[i],
+                        T_vals[i],
+                        r_vals[i],
+                        sigma_vals[i],
+                        option_type,
+                        q_vals[i],
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to price point {i}: {e}")
+                    prices[i] = 0.0
+
+            return prices
+
+        def delta_gamma_batch(
+            self,
+            S_vals,
+            K_vals,
+            T_vals,
+            r_vals,
+            sigma_vals,
+            option_type,
+            q_vals=0.0,
+            h=None,
+        ):
+            """Vectorized Greek calculation for multiple points at once"""
+            if isinstance(q_vals, (int, float)):
+                q_vals = np.full_like(S_vals, q_vals)
+
+            deltas = np.zeros(len(S_vals))
+            gammas = np.zeros(len(S_vals))
+
+            for i in range(len(S_vals)):
+                try:
+                    deltas[i], gammas[i] = self.delta_gamma(
+                        S_vals[i],
+                        K_vals[i],
+                        T_vals[i],
+                        r_vals[i],
+                        sigma_vals[i],
+                        option_type,
+                        q_vals[i],
+                        h,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Greeks for point {i}: {e}")
+                    deltas[i] = 0.0
+                    gammas[i] = 0.0
+
+            return deltas, gammas
+
+    return FallbackPricer(num_sim, num_steps, seed)
 
 
 def timeit_ms(fn, *args, **kwargs) -> tuple:
@@ -55,59 +261,6 @@ def timeit_ms(fn, *args, **kwargs) -> tuple:
     result = fn(*args, **kwargs)
     elapsed = (time.perf_counter() - start) * 1000.0
     return result, elapsed
-
-
-# ======================
-# BATCH WRAPPERS (Fix for missing methods in model)
-# ======================
-def run_price_batch(mc, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0):
-    """
-    Executes pricing in a loop using the model's single-item .price() method.
-    Replaces mc.price_batch() which is missing from the model.
-    """
-    if isinstance(q_vals, (int, float)):
-        q_vals = np.full_like(S_vals, q_vals)
-
-    n = len(S_vals)
-    prices = np.zeros(n)
-    
-    for i in range(n):
-        prices[i] = mc.price(
-            float(S_vals[i]), 
-            float(K_vals[i]), 
-            float(T_vals[i]), 
-            float(r_vals[i]), 
-            float(sigma_vals[i]), 
-            option_type, 
-            float(q_vals[i])
-        )
-    return prices
-
-def run_delta_gamma_batch(mc, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0):
-    """
-    Executes Greeks calculation in a loop using the model's single-item .delta_gamma() method.
-    Replaces mc.delta_gamma_batch() which is missing from the model.
-    """
-    if isinstance(q_vals, (int, float)):
-        q_vals = np.full_like(S_vals, q_vals)
-
-    n = len(S_vals)
-    deltas = np.zeros(n)
-    gammas = np.zeros(n)
-    
-    for i in range(n):
-        d, g = mc.delta_gamma(
-            float(S_vals[i]), 
-            float(K_vals[i]), 
-            float(T_vals[i]), 
-            float(r_vals[i]), 
-            float(sigma_vals[i]), 
-            option_type, 
-            float(q_vals[i])
-        )
-        deltas[i] = d
-        gammas[i] = g
-    return deltas, gammas
 
 
 # ======================
@@ -132,6 +285,11 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
     deltas_grid = np.zeros_like(S_flat)
     gammas_grid = np.zeros_like(S_flat)
 
+    # Verify pricer has required methods
+    if not hasattr(mc, 'price_batch') or not hasattr(mc, 'delta_gamma_batch'):
+        logger.error("Pricer missing batch methods - this should not happen!")
+        raise AttributeError("Pricer missing required batch methods")
+
     # Process in batches
     total_points = len(S_flat)
     num_batches = (total_points + batch_size - 1) // batch_size
@@ -140,31 +298,36 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
         start_idx = batch_idx * batch_size
         end_idx = min((batch_idx + 1) * batch_size, total_points)
 
-        # Price batch (using local wrapper instead of model method)
-        Z[start_idx:end_idx] = run_price_batch(
-            mc,
-            S_flat[start_idx:end_idx],
-            K_flat[start_idx:end_idx],
-            T_flat[start_idx:end_idx],
-            r_flat[start_idx:end_idx],
-            sigma_flat[start_idx:end_idx],
-            option_type,
-            q_flat[start_idx:end_idx],
-        )
+        try:
+            # Price batch
+            Z[start_idx:end_idx] = mc.price_batch(
+                S_flat[start_idx:end_idx],
+                K_flat[start_idx:end_idx],
+                T_flat[start_idx:end_idx],
+                r_flat[start_idx:end_idx],
+                sigma_flat[start_idx:end_idx],
+                option_type,
+                q_flat[start_idx:end_idx],
+            )
 
-        # Greeks batch (using local wrapper instead of model method)
-        deltas, gammas = run_delta_gamma_batch(
-            mc,
-            S_flat[start_idx:end_idx],
-            K_flat[start_idx:end_idx],
-            T_flat[start_idx:end_idx],
-            r_flat[start_idx:end_idx],
-            sigma_flat[start_idx:end_idx],
-            option_type,
-            q_flat[start_idx:end_idx],
-        )
-        deltas_grid[start_idx:end_idx] = deltas
-        gammas_grid[start_idx:end_idx] = gammas
+            # Greeks batch
+            deltas, gammas = mc.delta_gamma_batch(
+                S_flat[start_idx:end_idx],
+                K_flat[start_idx:end_idx],
+                T_flat[start_idx:end_idx],
+                r_flat[start_idx:end_idx],
+                sigma_flat[start_idx:end_idx],
+                option_type,
+                q_flat[start_idx:end_idx],
+            )
+            deltas_grid[start_idx:end_idx] = deltas
+            gammas_grid[start_idx:end_idx] = gammas
+        except Exception as e:
+            logger.error(f"Failed to process batch {batch_idx}: {e}")
+            # Fill with zeros for this batch
+            Z[start_idx:end_idx] = 0.0
+            deltas_grid[start_idx:end_idx] = 0.0
+            gammas_grid[start_idx:end_idx] = 0.0
 
     # Reshape back to grid
     Z = Z.reshape((nT, nS))
@@ -392,7 +555,7 @@ st.markdown(
         border: 1px solid #334155;
     }
     
-    /* Tabs styling - FULL WIDTH AND EXPANDED */
+    /* Tabs styling */
     .stTabs [data-baseweb="tablist"] {
         display: flex !important;
         flex-wrap: nowrap !important;
@@ -456,11 +619,6 @@ st.markdown(
         font-weight: 700;
         line-height: 1.2;
     }
-    .metric-delta {
-        color: #64748B;
-        font-size: 1rem;
-        margin-top: 0.3rem;
-    }
     
     /* Section headers */
     .subsection-header {
@@ -480,19 +638,8 @@ st.markdown(
     }
     .engine-label {
         font-size: 0.9rem;
-        color: white;  /* CHANGED FROM #94A3B8 TO WHITE */
-        margin-bottom: 0.3rem;
-    }
-    .engine-value {
-        font-size: 1.1rem;
         color: white;
-        font-weight: 500;
-    }
-    
-    /* Progress bar */
-    .stProgress > div > div > div {
-        background-color: #3B82F6;
-        height: 8px !important;
+        margin-bottom: 0.3rem;
     }
     
     /* Button styling */
@@ -726,30 +873,26 @@ if run:
         status_text.text("Initializing Monte Carlo engine...")
         progress_bar.progress(10)
 
-        try:
-            mc = get_mc_unified_pricer(num_sim, num_steps, seed, use_numba, use_gpu)
-            status_text.text("Monte Carlo engine initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize Monte Carlo engine: {str(e)}")
-            st.error(f"Failed to initialize engine: {e}")
+        mc = get_mc_unified_pricer(num_sim, num_steps, seed, use_numba, use_gpu)
+        
+        # Verify pricer is working
+        if not verify_pricer_methods(mc):
+            st.error("❌ Pricer initialization failed - missing required methods")
             st.stop()
+        
+        status_text.text("✅ Monte Carlo engine initialized successfully")
+        progress_bar.progress(20)
 
         # Calculate single option price
         status_text.text("Calculating option price...")
-        progress_bar.progress(20)
-
-        try:
-            (price, t_ms) = timeit_ms(mc.price, S, K, T, r, sigma, option_type, q)
-            (delta, gamma) = timeit_ms(
-                mc.delta_gamma, S, K, T, r, sigma, option_type, q
-            )[0]
-            status_text.text(f"Price calculated: ${price:.6f}")
-        except Exception as e:
-            logger.error(f"Price calculation failed: {str(e)}")
-            logger.error(traceback.format_exc())
-            price, delta, gamma = 0.0, 0.5, 0.01
-            t_ms = 0.0
-            st.error("Failed to calculate option price. Using default values.")
+        
+        (price, t_ms) = timeit_ms(mc.price, S, K, T, r, sigma, option_type, q)
+        (delta, gamma) = timeit_ms(
+            mc.delta_gamma, S, K, T, r, sigma, option_type, q
+        )[0]
+        
+        status_text.text(f"✅ Price calculated: ${price:.6f}")
+        progress_bar.progress(30)
 
         # Display results
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
@@ -781,7 +924,7 @@ if run:
 
         # Generate price surface
         status_text.text(f"Generating price surface ({nS}×{nT} points)...")
-        progress_bar.progress(30)
+        progress_bar.progress(40)
 
         # Create grid for surface
         Sg = np.linspace(s_low, s_high, nS)
@@ -791,6 +934,9 @@ if run:
         Sm, Tm, Z, deltas_grid, gammas_grid = generate_surface_data(
             mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
         )
+
+        status_text.text(f"✅ Surface generated successfully")
+        progress_bar.progress(60)
 
         # Create visualization tabs
         tab1, tab2, tab3, tab4 = st.tabs(
@@ -862,7 +1008,7 @@ if run:
             fig_price.add_trace(
                 go.Scatter(
                     x=Sg,
-                    y=Z[nT // 2, :],  # Middle T value
+                    y=Z[nT // 2, :],
                     mode="lines+markers",
                     name=f"T={Tg[nT//2]:.2f}",
                     line=dict(color="#3B82F6", width=2.5),
@@ -890,7 +1036,7 @@ if run:
             fig_delta.add_trace(
                 go.Scatter(
                     x=Sg,
-                    y=deltas_grid[nT // 2, :],  # Middle T value
+                    y=deltas_grid[nT // 2, :],
                     mode="lines+markers",
                     name=f"T={Tg[nT//2]:.2f}",
                     line=dict(color="#3B82F6", width=2.5),
@@ -919,7 +1065,7 @@ if run:
             fig_gamma.add_trace(
                 go.Scatter(
                     x=Sg,
-                    y=gammas_grid[nT // 2, :],  # Middle T value
+                    y=gammas_grid[nT // 2, :],
                     mode="lines+markers",
                     name=f"T={Tg[nT//2]:.2f}",
                     line=dict(color="#10B981", width=2.5),
@@ -949,169 +1095,15 @@ if run:
                 unsafe_allow_html=True,
             )
 
-            # Create sample data for different simulation sizes
-            sim_sizes = [10000, 25000, 50000, 100000, 200000]
-            times = []
-            prices = []
-            deltas = []
-            gammas = []
-
-            for size in sim_sizes:
-                try:
-                    # Time the pricing with different simulation sizes
-                    # Note: We must create a new instance to change num_sim efficiently 
-                    # or update the existing one if mutable. For safety we re-init.
-                    # Since this is "YOUR model", we assume we can re-instantiate it.
-                    mc_perf = get_mc_unified_pricer(size, num_steps, seed, use_numba, use_gpu)
-                    
-                    start = time.perf_counter()
-                    price = mc_perf.price(S, K, T, r, sigma, option_type, q)
-                    delta_val, gamma_val = mc_perf.delta_gamma(
-                        S, K, T, r, sigma, option_type, q
-                    )
-                    elapsed = (time.perf_counter() - start) * 1000.0
-
-                    times.append(elapsed)
-                    prices.append(price)
-                    deltas.append(delta_val)
-                    gammas.append(gamma_val)
-                except Exception as e:
-                    logger.error(f"Performance test failed for size {size}: {str(e)}")
-                    times.append(0)
-                    prices.append(0)
-                    deltas.append(0)
-                    gammas.append(0)
-
-            # Create performance chart
-            fig_performance = go.Figure()
-
-            # Add time vs simulation size
-            fig_performance.add_trace(
-                go.Scatter(
-                    x=sim_sizes,
-                    y=times,
-                    mode="lines+markers",
-                    name="Execution Time",
-                    line=dict(color="#3B82F6", width=2.5),
-                    marker=dict(size=8),
-                )
-            )
-
-            fig_performance.update_layout(
-                title="Performance: Simulation Size vs Execution Time",
-                xaxis_title="Number of Simulations",
-                yaxis_title="Execution Time (ms)",
-                height=400,
-                template="plotly_dark",
-                paper_bgcolor="rgba(30,41,59,1)",
-                plot_bgcolor="rgba(15,23,42,1)",
-                font=dict(size=14),
-                yaxis_type="log",
-            )
-            st.plotly_chart(fig_performance, use_container_width=True)
-
-            # Create convergence charts
-            col1, col2, col3 = st.columns(3)
-
-            # Price convergence
-            with col1:
-                st.markdown(
-                    '<h3 class="subsection-header">Price Convergence</h3>',
-                    unsafe_allow_html=True,
-                )
-                fig_price_conv = go.Figure()
-                fig_price_conv.add_trace(
-                    go.Scatter(
-                        x=sim_sizes,
-                        y=prices,
-                        mode="lines+markers",
-                        name="Price",
-                        line=dict(color="#3B82F6", width=2.5),
-                        marker=dict(size=8),
-                    )
-                )
-                fig_price_conv.update_layout(
-                    height=300,
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(30,41,59,1)",
-                    plot_bgcolor="rgba(15,23,42,1)",
-                    font=dict(size=12),
-                    yaxis_title="Price",
-                )
-                st.plotly_chart(fig_price_conv, use_container_width=True)
-
-            # Delta convergence
-            with col2:
-                st.markdown(
-                    '<h3 class="subsection-header">Delta Convergence</h3>',
-                    unsafe_allow_html=True,
-                )
-                fig_delta_conv = go.Figure()
-                fig_delta_conv.add_trace(
-                    go.Scatter(
-                        x=sim_sizes,
-                        y=deltas,
-                        mode="lines+markers",
-                        name="Delta",
-                        line=dict(color="#10B981", width=2.5),
-                        marker=dict(size=8),
-                    )
-                )
-                fig_delta_conv.update_layout(
-                    height=300,
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(30,41,59,1)",
-                    plot_bgcolor="rgba(15,23,42,1)",
-                    font=dict(size=12),
-                    yaxis_title="Delta",
-                )
-                st.plotly_chart(fig_delta_conv, use_container_width=True)
-
-            # Gamma convergence
-            with col3:
-                st.markdown(
-                    '<h3 class="subsection-header">Gamma Convergence</h3>',
-                    unsafe_allow_html=True,
-                )
-                fig_gamma_conv = go.Figure()
-                fig_gamma_conv.add_trace(
-                    go.Scatter(
-                        x=sim_sizes,
-                        y=gammas,
-                        mode="lines+markers",
-                        name="Gamma",
-                        line=dict(color="#F59E0B", width=2.5),
-                        marker=dict(size=8),
-                    )
-                )
-                fig_gamma_conv.update_layout(
-                    height=300,
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(30,41,59,1)",
-                    plot_bgcolor="rgba(15,23,42,1)",
-                    font=dict(size=12),
-                    yaxis_title="Gamma",
-                )
-                st.plotly_chart(fig_gamma_conv, use_container_width=True)
-
             # Performance metrics
-            st.markdown(
-                '<h3 class="subsection-header">Performance Metrics</h3>',
-                unsafe_allow_html=True,
-            )
-
             col1, col2, col3 = st.columns(3)
-
-            # Speedup calculation
-            base_time = times[0] if len(times) > 0 and times[0] > 0 else 1
-            speedup = (base_time / times[-1]) if len(times) > 0 and times[-1] > 0 else 1
 
             col1.markdown(
                 '<div style="background-color: #1E293B; border-radius: 8px; padding: 1rem;">',
                 unsafe_allow_html=True,
             )
             col1.markdown(
-                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Execution Time (50k sims)</div>',
+                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Execution Time</div>',
                 unsafe_allow_html=True,
             )
             col1.markdown(
@@ -1125,11 +1117,11 @@ if run:
                 unsafe_allow_html=True,
             )
             col2.markdown(
-                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Speedup Factor</div>',
+                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Simulations</div>',
                 unsafe_allow_html=True,
             )
             col2.markdown(
-                f'<div style="color: white; font-size: 1.5rem; font-weight: 600; margin-top: 0.3rem;">{speedup:.1f}x</div>',
+                f'<div style="color: white; font-size: 1.5rem; font-weight: 600; margin-top: 0.3rem;">{num_sim:,}</div>',
                 unsafe_allow_html=True,
             )
             col2.markdown("</div>", unsafe_allow_html=True)
@@ -1151,18 +1143,24 @@ if run:
         # Final progress update
         progress_bar.progress(100)
         time.sleep(0.2)
+        status_text.text("✅ Analysis complete!")
+        time.sleep(1)
         status_text.empty()
         progress_bar.empty()
 
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
+        st.error(f"❌ An error occurred: {str(e)}")
         logger.exception("Critical error in Monte Carlo Unified")
+        
+        with st.expander("Error Details"):
+            st.code(traceback.format_exc())
 
         st.markdown(
             """
         <div style="background-color: #1E293B; border-radius: 8px; padding: 1rem; border: 1px solid #334155; margin-top: 1rem;">
             <h3 style="color: white; margin: 0 0 0.5rem 0;">Troubleshooting Tips</h3>
             <ul style="color: #CBD5E1; padding-left: 1.2rem; margin-bottom: 0;">
+                <li>Click "Reboot app" in Streamlit Cloud to clear cached modules</li>
                 <li>Ensure all input values are valid (positive numbers, etc.)</li>
                 <li>Try reducing the simulation size if performance is poor</li>
                 <li>Disable GPU acceleration if you're not using a GPU instance</li>

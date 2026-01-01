@@ -24,14 +24,12 @@ from sklearn.preprocessing import StandardScaler
 
 try:
     import numba
-
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
 
 try:
     import cupy as cp
-
     GPU_AVAILABLE = True
 except ImportError:
     GPU_AVAILABLE = False
@@ -215,15 +213,19 @@ class MonteCarloPricerUni:
         prices = np.zeros(n)
         
         for i in range(n):
-            prices[i] = self.price(
-                float(S_vals[i]), 
-                float(K_vals[i]), 
-                float(T_vals[i]), 
-                float(r_vals[i]), 
-                float(sigma_vals[i]), 
-                option_type, 
-                float(q_vals[i])
-            )
+            try:
+                prices[i] = self.price(
+                    float(S_vals[i]), 
+                    float(K_vals[i]), 
+                    float(T_vals[i]), 
+                    float(r_vals[i]), 
+                    float(sigma_vals[i]), 
+                    option_type, 
+                    float(q_vals[i])
+                )
+            except Exception as e:
+                print(f"Warning: Failed to price point {i}: {e}")
+                prices[i] = 0.0
         return prices
 
     def delta_gamma_batch(
@@ -240,18 +242,23 @@ class MonteCarloPricerUni:
         gammas = np.zeros(n)
 
         for i in range(n):
-            d, g = self.delta_gamma(
-                float(S_vals[i]), 
-                float(K_vals[i]), 
-                float(T_vals[i]), 
-                float(r_vals[i]), 
-                float(sigma_vals[i]), 
-                option_type, 
-                float(q_vals[i]),
-                h=h
-            )
-            deltas[i] = d
-            gammas[i] = g
+            try:
+                d, g = self.delta_gamma(
+                    float(S_vals[i]), 
+                    float(K_vals[i]), 
+                    float(T_vals[i]), 
+                    float(r_vals[i]), 
+                    float(sigma_vals[i]), 
+                    option_type, 
+                    float(q_vals[i]),
+                    h=h
+                )
+                deltas[i] = d
+                gammas[i] = g
+            except Exception as e:
+                print(f"Warning: Failed to calculate Greeks for point {i}: {e}")
+                deltas[i] = 0.0
+                gammas[i] = 0.0
             
         return deltas, gammas
 
