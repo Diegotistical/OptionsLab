@@ -47,10 +47,12 @@ def get_mc_unified_pricer(
 ) -> Any:
     """Robust import of MonteCarloPricerUni with fallback implementation"""
     try:
+        # Try direct import from expected location
         from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni
 
         pricer = MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
         
+        # Verify methods exist
         if verify_pricer_methods(pricer):
             logger.info("Successfully loaded MonteCarloPricerUni with all methods")
             return pricer
@@ -61,6 +63,7 @@ def get_mc_unified_pricer(
     except ImportError as e:
         logger.warning(f"Primary import failed: {e}")
         try:
+            # Try alternative import paths
             from pricing_models.monte_carlo_unified import MonteCarloPricerUni
 
             pricer = MonteCarloPricerUni(num_sim, num_steps, seed, use_numba, use_gpu)
@@ -89,85 +92,105 @@ def _create_fallback_pricer(
             self.num_steps = num_steps
             self.seed = seed
             np.random.seed(seed)
-            logger.info(f"Initialized FallbackPricer with {num_sim} simulations")
+            logger.info(f"Initialized FallbackPricer with {num_sim} simulations, {num_steps} steps")
 
-        def price(self, S, K, T, r, sigma, option_type, q=0.0, seed=None, use_path_simulation=False):
-            """Direct terminal simulation (correct for European options)"""
+        def price(self, S, K, T, r, sigma, option_type, q=0.0, seed=None):
+            """Simplified MC pricing implementation with proper validation"""
+            # Validate inputs
             if S <= 0 or K <= 0 or T <= 0.001 or sigma <= 0.001:
                 return 0.0
 
+            # Use provided seed if available
             if seed is not None:
                 np.random.seed(seed)
 
-            # ALWAYS use direct terminal for European options
-            Z = np.random.standard_normal(self.num_sim)
-            Z_ant = -Z
-            
-            drift = (r - q - 0.5 * sigma**2) * T
-            diffusion = sigma * np.sqrt(T)
-            
-            S_T = np.concatenate([
-                S * np.exp(drift + diffusion * Z),
-                S * np.exp(drift + diffusion * Z_ant)
-            ])
+            # Generate paths
+            dt = T / self.num_steps
+            Z = np.random.standard_normal((self.num_sim, self.num_steps))
+            S_paths = np.zeros((self.num_sim, self.num_steps))
+            S_paths[:, 0] = S
 
+            for t in range(1, self.num_steps):
+                drift = (r - q - 0.5 * sigma**2) * dt
+                diffusion = sigma * np.sqrt(dt) * Z[:, t]
+                S_paths[:, t] = S_paths[:, t - 1] * np.exp(drift + diffusion)
+
+            # Calculate payoff
             if option_type == "call":
-                payoff = np.maximum(S_T - K, 0.0)
+                payoff = np.maximum(S_paths[:, -1] - K, 0.0)
             else:
-                payoff = np.maximum(K - S_T, 0.0)
+                payoff = np.maximum(K - S_paths[:, -1], 0.0)
 
             return float(np.mean(np.exp(-r * T) * payoff))
 
         def delta_gamma(self, S, K, T, r, sigma, option_type, q=0.0, h=None, seed=None):
-            """Calculate delta and gamma using central differences with CRN"""
+            """Calculate delta and gamma using central differences with common random numbers"""
+            # Adaptive step size based on spot price
             if h is None:
                 h = max(1e-4 * S, 1e-5)
 
+            # Use provided seed for CRN
             if seed is not None:
                 base_seed = seed
             else:
                 base_seed = self.seed + 1
 
-            # Use same random numbers for all three points (CRN)
+            # Temporarily increase simulations for more stable Greeks
+            num_sim_temp = max(self.num_sim, 100000)
+
+            # Generate random numbers ONCE and reuse for all three points
             np.random.seed(base_seed)
-            Z = np.random.standard_normal(self.num_sim)
-            Z_ant = -Z
+            dt = T / self.num_steps
+            Z = np.random.standard_normal((num_sim_temp, self.num_steps))
 
-            drift = (r - q - 0.5 * sigma**2) * T
-            diffusion = sigma * np.sqrt(T)
+            # Generate paths for all three points
+            S_paths_up = np.zeros((num_sim_temp, self.num_steps))
+            S_paths_down = np.zeros((num_sim_temp, self.num_steps))
+            S_paths_mid = np.zeros((num_sim_temp, self.num_steps))
 
-            # Calculate for S-h, S, S+h using same Z
-            S_arr = np.array([S - h, S, S + h])
-            prices = []
-            
-            for S_i in S_arr:
-                S_T = np.concatenate([
-                    S_i * np.exp(drift + diffusion * Z),
-                    S_i * np.exp(drift + diffusion * Z_ant)
-                ])
-                
-                if option_type == "call":
-                    payoff = np.maximum(S_T - K, 0.0)
-                else:
-                    payoff = np.maximum(K - S_T, 0.0)
-                
-                price = float(np.mean(np.exp(-r * T) * payoff))
-                prices.append(price)
+            S_paths_up[:, 0] = S + h
+            S_paths_down[:, 0] = S - h
+            S_paths_mid[:, 0] = S
 
-            delta = (prices[2] - prices[0]) / (2 * h)
-            gamma = (prices[2] - 2 * prices[1] + prices[0]) / (h**2)
+            for t in range(1, self.num_steps):
+                drift = (r - q - 0.5 * sigma**2) * dt
+                diffusion = sigma * np.sqrt(dt) * Z[:, t]
+                S_paths_up[:, t] = S_paths_up[:, t - 1] * np.exp(drift + diffusion)
+                S_paths_down[:, t] = S_paths_down[:, t - 1] * np.exp(drift + diffusion)
+                S_paths_mid[:, t] = S_paths_mid[:, t - 1] * np.exp(drift + diffusion)
 
-            # Validation
+            # Calculate payoffs
+            if option_type == "call":
+                payoff_up = np.maximum(S_paths_up[:, -1] - K, 0.0)
+                payoff_down = np.maximum(S_paths_down[:, -1] - K, 0.0)
+                payoff_mid = np.maximum(S_paths_mid[:, -1] - K, 0.0)
+            else:
+                payoff_up = np.maximum(K - S_paths_up[:, -1], 0.0)
+                payoff_down = np.maximum(K - S_paths_down[:, -1], 0.0)
+                payoff_mid = np.maximum(K - S_paths_mid[:, -1], 0.0)
+
+            # Calculate prices
+            price_up = float(np.mean(np.exp(-r * T) * payoff_up))
+            price_down = float(np.mean(np.exp(-r * T) * payoff_down))
+            price_mid = float(np.mean(np.exp(-r * T) * payoff_mid))
+
+            # Calculate delta and gamma
+            delta = (price_up - price_down) / (2 * h)
+            gamma = (price_up - 2 * price_mid + price_down) / (h**2)
+
+            # VALIDATION: Ensure delta is in proper range
             if option_type == "call":
                 delta = max(0.0, min(1.0, delta))
             else:
                 delta = max(-1.0, min(0.0, delta))
+
+            # VALIDATION: Gamma must be positive
             gamma = max(0.0, gamma)
 
             return float(delta), float(gamma)
 
         def price_batch(
-            self, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0, use_path_simulation=False
+            self, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0
         ):
             """Vectorized pricing for multiple points at once"""
             if isinstance(q_vals, (int, float)):
@@ -178,8 +201,13 @@ def _create_fallback_pricer(
             for i in range(len(S_vals)):
                 try:
                     prices[i] = self.price(
-                        S_vals[i], K_vals[i], T_vals[i], r_vals[i], sigma_vals[i],
-                        option_type, q_vals[i], use_path_simulation=use_path_simulation
+                        S_vals[i],
+                        K_vals[i],
+                        T_vals[i],
+                        r_vals[i],
+                        sigma_vals[i],
+                        option_type,
+                        q_vals[i],
                     )
                 except Exception as e:
                     logger.warning(f"Failed to price point {i}: {e}")
@@ -188,7 +216,15 @@ def _create_fallback_pricer(
             return prices
 
         def delta_gamma_batch(
-            self, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0, h=None
+            self,
+            S_vals,
+            K_vals,
+            T_vals,
+            r_vals,
+            sigma_vals,
+            option_type,
+            q_vals=0.0,
+            h=None,
         ):
             """Vectorized Greek calculation for multiple points at once"""
             if isinstance(q_vals, (int, float)):
@@ -200,8 +236,14 @@ def _create_fallback_pricer(
             for i in range(len(S_vals)):
                 try:
                     deltas[i], gammas[i] = self.delta_gamma(
-                        S_vals[i], K_vals[i], T_vals[i], r_vals[i], sigma_vals[i],
-                        option_type, q_vals[i], h
+                        S_vals[i],
+                        K_vals[i],
+                        T_vals[i],
+                        r_vals[i],
+                        sigma_vals[i],
+                        option_type,
+                        q_vals[i],
+                        h,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to calculate Greeks for point {i}: {e}")
@@ -224,12 +266,13 @@ def timeit_ms(fn, *args, **kwargs) -> tuple:
 # ======================
 # OPTIMIZED SURFACE GENERATION
 # ======================
-def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25, use_path_simulation=False):
+def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25):
     """Generate surface data in batches for better performance"""
     nS = len(Sg)
     nT = len(Tg)
     Sm, Tm = np.meshgrid(Sg, Tg)
 
+    # Flatten the grid for batch processing
     S_flat = Sm.flatten()
     T_flat = Tm.flatten()
     K_flat = np.full_like(S_flat, K)
@@ -237,14 +280,17 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
     sigma_flat = np.full_like(S_flat, sigma)
     q_flat = np.full_like(S_flat, q)
 
+    # Initialize result arrays
     Z = np.zeros_like(S_flat)
     deltas_grid = np.zeros_like(S_flat)
     gammas_grid = np.zeros_like(S_flat)
 
+    # Verify pricer has required methods
     if not hasattr(mc, 'price_batch') or not hasattr(mc, 'delta_gamma_batch'):
-        logger.error("Pricer missing batch methods!")
+        logger.error("Pricer missing batch methods - this should not happen!")
         raise AttributeError("Pricer missing required batch methods")
 
+    # Process in batches
     total_points = len(S_flat)
     num_batches = (total_points + batch_size - 1) // batch_size
 
@@ -253,6 +299,7 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
         end_idx = min((batch_idx + 1) * batch_size, total_points)
 
         try:
+            # Price batch
             Z[start_idx:end_idx] = mc.price_batch(
                 S_flat[start_idx:end_idx],
                 K_flat[start_idx:end_idx],
@@ -261,9 +308,9 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
                 sigma_flat[start_idx:end_idx],
                 option_type,
                 q_flat[start_idx:end_idx],
-                use_path_simulation=use_path_simulation
             )
 
+            # Greeks batch
             deltas, gammas = mc.delta_gamma_batch(
                 S_flat[start_idx:end_idx],
                 K_flat[start_idx:end_idx],
@@ -277,10 +324,12 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
             gammas_grid[start_idx:end_idx] = gammas
         except Exception as e:
             logger.error(f"Failed to process batch {batch_idx}: {e}")
+            # Fill with zeros for this batch
             Z[start_idx:end_idx] = 0.0
             deltas_grid[start_idx:end_idx] = 0.0
             gammas_grid[start_idx:end_idx] = 0.0
 
+    # Reshape back to grid
     Z = Z.reshape((nT, nS))
     deltas_grid = deltas_grid.reshape((nT, nS))
     gammas_grid = gammas_grid.reshape((nT, nS))
@@ -289,7 +338,7 @@ def generate_surface_data(mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
 
 
 # ======================
-# HELPER FUNCTIONS (Same as original)
+# HELPER FUNCTIONS
 # ======================
 def create_price_surface(
     Sg: np.ndarray, Tg: np.ndarray, Z: np.ndarray, K: float, option_type: str
@@ -325,6 +374,84 @@ def create_price_surface(
     return fig
 
 
+def create_heatmap(
+    Sg: np.ndarray, Tg: np.ndarray, Z: np.ndarray, K: float, option_type: str
+) -> go.Figure:
+    """Create price heatmap visualization"""
+    df = pd.DataFrame(
+        {"S": np.repeat(Sg, len(Tg)), "T": np.tile(Tg, len(Sg)), "Price": Z.flatten()}
+    )
+
+    fig = px.density_heatmap(
+        df,
+        x="S",
+        y="T",
+        z="Price",
+        color_continuous_scale="Viridis",
+        labels={"Price": "Option Price"},
+        title=f"Price Heatmap (K={K}, {option_type.capitalize()})",
+    )
+
+    fig.update_layout(
+        height=500,
+        template="plotly_dark",
+        paper_bgcolor="rgba(30,41,59,1)",
+        plot_bgcolor="rgba(15,23,42,1)",
+        font=dict(size=14),
+        coloraxis_colorbar=dict(title="Price", thickness=25),
+    )
+
+    return fig
+
+
+def create_slice_plot(
+    Sg: np.ndarray,
+    Tg: np.ndarray,
+    Z: np.ndarray,
+    fixed_T_idx: Optional[int] = None,
+    fixed_S_idx: Optional[int] = None,
+) -> go.Figure:
+    """Create slice plots for price surface"""
+    fig = go.Figure()
+
+    # Add T slice if specified
+    if fixed_T_idx is not None and 0 <= fixed_T_idx < len(Tg):
+        fig.add_trace(
+            go.Scatter(
+                x=Sg,
+                y=Z[fixed_T_idx, :],
+                mode="lines+markers",
+                name=f"T={Tg[fixed_T_idx]:.2f}",
+                line=dict(width=2.5),
+            )
+        )
+
+    # Add S slice if specified
+    if fixed_S_idx is not None and 0 <= fixed_S_idx < len(Sg):
+        fig.add_trace(
+            go.Scatter(
+                x=Tg,
+                y=Z[:, fixed_S_idx],
+                mode="lines+markers",
+                name=f"S={Sg[fixed_S_idx]:.2f}",
+                line=dict(width=2.5, dash="dash"),
+            )
+        )
+
+    fig.update_layout(
+        title="Price Slices",
+        xaxis_title="S" if fixed_T_idx is not None else "T",
+        yaxis_title="Option Price",
+        height=400,
+        template="plotly_dark",
+        paper_bgcolor="rgba(30,41,59,1)",
+        plot_bgcolor="rgba(15,23,42,1)",
+        font=dict(size=14),
+    )
+
+    return fig
+
+
 def create_greeks_heatmap(
     Sg: np.ndarray,
     Tg: np.ndarray,
@@ -334,6 +461,7 @@ def create_greeks_heatmap(
     option_type: str,
 ) -> tuple:
     """Create heatmaps for Greeks"""
+    # Delta heatmap
     df_delta = pd.DataFrame(
         {
             "S": np.repeat(Sg, len(Tg)),
@@ -361,6 +489,7 @@ def create_greeks_heatmap(
         coloraxis_colorbar=dict(title="Delta", thickness=25),
     )
 
+    # Gamma heatmap
     df_gamma = pd.DataFrame(
         {
             "S": np.repeat(Sg, len(Tg)),
@@ -392,13 +521,17 @@ def create_greeks_heatmap(
 
 
 # ======================
-# STREAMLIT UI (Same styling as original)
+# STREAMLIT UI
 # ======================
 st.set_page_config(page_title="Monte Carlo Unified", layout="wide", page_icon="🚀")
 
+# ======================
+# STYLING
+# ======================
 st.markdown(
     """
 <style>
+    /* Base styling */
     .main-header {
         font-size: 2.5rem;
         color: white;
@@ -412,6 +545,8 @@ st.markdown(
         margin-bottom: 1.5rem;
         opacity: 0.9;
     }
+    
+    /* Metric cards */
     .metric-card {
         background-color: #1E293B;
         border-radius: 12px;
@@ -419,6 +554,8 @@ st.markdown(
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
         border: 1px solid #334155;
     }
+    
+    /* Tabs styling */
     .stTabs [data-baseweb="tablist"] {
         display: flex !important;
         flex-wrap: nowrap !important;
@@ -453,6 +590,8 @@ st.markdown(
         background-color: #334155 !important;
         color: white !important;
     }
+    
+    /* Chart elements */
     .chart-title {
         font-size: 1.5rem;
         font-weight: 600;
@@ -467,6 +606,8 @@ st.markdown(
         margin-bottom: 1.5rem;
         line-height: 1.5;
     }
+    
+    /* Metric elements */
     .metric-label {
         color: #94A3B8;
         font-size: 0.9rem;
@@ -478,12 +619,16 @@ st.markdown(
         font-weight: 700;
         line-height: 1.2;
     }
+    
+    /* Section headers */
     .subsection-header {
         font-size: 1.4rem;
         color: white;
         margin: 1.2rem 0 0.8rem 0;
         font-weight: 600;
     }
+    
+    /* Input sections */
     .engine-option {
         background-color: #1E293B;
         border-radius: 8px;
@@ -496,6 +641,8 @@ st.markdown(
         color: white;
         margin-bottom: 0.3rem;
     }
+    
+    /* Button styling */
     .stButton > button {
         background-color: #3B82F6;
         color: white;
@@ -512,19 +659,13 @@ st.markdown(
         transform: translateY(-1px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.3);
     }
+    
+    /* Input field labels */
     .stNumberInput > div > label,
     .stSlider > div > label,
     .stSelectbox > div > label {
         color: white !important;
         font-weight: 500 !important;
-    }
-    .info-box {
-        background-color: #1e293b;
-        border-left: 4px solid #3b82f6;
-        padding: 1rem;
-        border-radius: 4px;
-        margin: 1rem 0;
-        color: #e2e8f0;
     }
 </style>
 """,
@@ -535,27 +676,13 @@ st.markdown(
 # PAGE CONTENT
 # ======================
 st.markdown(
-    '<h1 class="main-header">Monte Carlo Unified (Direct Terminal Simulation)</h1>',
+    '<h1 class="main-header">Monte Carlo Unified (CPU/GPU + Antithetic)</h1>',
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<p class="sub-header">High-performance option pricing using exact terminal distribution (1 timestep, zero bias)</p>',
+    '<p class="sub-header">High-performance option pricing with unified CPU/GPU implementation and variance reduction techniques</p>',
     unsafe_allow_html=True,
 )
-
-# Info box explaining the method
-st.markdown('<div class="info-box">', unsafe_allow_html=True)
-st.markdown("""
-<strong>📊 Technical Note: Direct Terminal Simulation</strong><br>
-For European options, this implementation uses the exact terminal distribution:<br>
-<code>S_T = S_0 * exp((r - q - 0.5*σ²)*T + σ*√T*Z)</code><br><br>
-This means:<br>
-• ✅ <strong>1 timestep</strong> (not 100) - matches the exact mathematical solution<br>
-• ✅ <strong>Zero discretization bias</strong> - no Euler-Maruyama approximation error<br>
-• ✅ <strong>~100x faster</strong> - eliminates unnecessary path discretization<br>
-• ✅ <strong>Pure sampling variance</strong> - interpretable convergence properties
-""", unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
 
 # Engine Configuration
 st.markdown(
@@ -564,18 +691,35 @@ st.markdown(
 col1, col2 = st.columns([1, 1], gap="medium")
 
 with col1:
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Simulations (paths)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="engine-label">Simulations</div>', unsafe_allow_html=True)
     num_sim = st.slider("", 10_000, 200_000, 30_000, step=10_000, key="sim_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="engine-label">Time Steps</div>', unsafe_allow_html=True)
+    num_steps = st.slider("", 10, 500, 100, step=10, key="steps_unified")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with col2:
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
     st.markdown('<div class="engine-label">Random Seed</div>', unsafe_allow_html=True)
     seed = st.number_input("", value=42, min_value=1, key="seed_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-with col2:
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
     st.markdown('<div class="engine-label">Acceleration</div>', unsafe_allow_html=True)
     col2_1, col2_2 = st.columns(2)
     with col2_1:
@@ -591,38 +735,71 @@ st.markdown(
 col1, col2 = st.columns([1, 1], gap="medium")
 
 with col1:
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Spot Price (S)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Spot Price (S)</div>', unsafe_allow_html=True
+    )
     S = st.number_input("", 1.0, 1_000.0, 100.0, key="spot_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Strike Price (K)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Strike Price (K)</div>', unsafe_allow_html=True
+    )
     K = st.number_input("", 1.0, 1_000.0, 100.0, key="strike_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Maturity (T, years)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Maturity (T, years)</div>', unsafe_allow_html=True
+    )
     T = st.number_input("", 0.01, 5.0, 1.0, key="maturity_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
 with col2:
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Risk-free Rate (r)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Risk-free Rate (r)</div>', unsafe_allow_html=True
+    )
     r = st.number_input("", 0.0, 0.25, 0.05, key="riskfree_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Dividend Yield (q)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Dividend Yield (q)</div>', unsafe_allow_html=True
+    )
     q = st.number_input("", 0.0, 0.2, 0.0, key="dividend_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Volatility (σ)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Volatility (σ)</div>', unsafe_allow_html=True
+    )
     sigma = st.number_input("", 0.001, 2.0, 0.2, key="volatility_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
     st.markdown('<div class="engine-label">Option Type</div>', unsafe_allow_html=True)
     option_type = st.selectbox("", ["call", "put"], key="option_type_unified")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -635,29 +812,49 @@ st.markdown(
 col1, col2 = st.columns([1, 1], gap="medium")
 
 with col1:
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Spot Price Range (S)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Spot Price Range (S)</div>', unsafe_allow_html=True
+    )
     s_low, s_high = st.slider("", 50, 200, (80, 120), key="s_range_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Maturity Range (T)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Maturity Range (T)</div>', unsafe_allow_html=True
+    )
     t_low, t_high = st.slider("", 0.05, 2.0, (0.1, 1.5), key="t_range_unified")
     st.markdown("</div>", unsafe_allow_html=True)
 
 with col2:
-    st.markdown('<div class="engine-option">', unsafe_allow_html=True)
-    st.markdown('<div class="engine-label">Grid Resolution</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="engine-option" style="margin-bottom: 0.75rem;">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="engine-label">Grid Resolution</div>', unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div class="engine-label" style="font-size: 0.75rem; margin-top: 0.2rem;">(Higher = more detailed but slower)</div>',
+        unsafe_allow_html=True,
+    )
     grid_size = st.select_slider(
         "",
         options=["Low (5×5)", "Medium (15×15)", "High (25×25)"],
         value="Medium (15×15)",
         key="grid_size_unified",
     )
+    # Map to actual grid size
     nS = nT = {"Low (5×5)": 5, "Medium (15×15)": 15, "High (25×25)": 25}[grid_size]
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Run button
+# Run button centered
 st.markdown(
     '<div style="display: flex; justify-content: center; margin: 1.5rem 0;">',
     unsafe_allow_html=True,
@@ -668,14 +865,17 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Main application logic
 if run:
     try:
+        # Initialize progress indicators
         progress_bar = st.progress(0)
         status_text = st.empty()
 
+        # Initialize pricer
         status_text.text("Initializing Monte Carlo engine...")
         progress_bar.progress(10)
 
-        mc = get_mc_unified_pricer(num_sim, 1, seed, use_numba, use_gpu)  # num_steps=1 for direct terminal
+        mc = get_mc_unified_pricer(num_sim, num_steps, seed, use_numba, use_gpu)
         
+        # Verify pricer is working
         if not verify_pricer_methods(mc):
             st.error("❌ Pricer initialization failed - missing required methods")
             st.stop()
@@ -683,10 +883,10 @@ if run:
         status_text.text("✅ Monte Carlo engine initialized successfully")
         progress_bar.progress(20)
 
-        # Calculate single option price (ALWAYS use direct terminal)
-        status_text.text("Calculating option price (direct terminal)...")
+        # Calculate single option price
+        status_text.text("Calculating option price...")
         
-        (price, t_ms) = timeit_ms(mc.price, S, K, T, r, sigma, option_type, q, use_path_simulation=False)
+        (price, t_ms) = timeit_ms(mc.price, S, K, T, r, sigma, option_type, q)
         (delta, gamma) = timeit_ms(
             mc.delta_gamma, S, K, T, r, sigma, option_type, q
         )[0]
@@ -698,17 +898,27 @@ if run:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         col1, col2, col3, col4 = st.columns(4)
 
-        col1.markdown('<div class="metric-label">Option Price</div>', unsafe_allow_html=True)
-        col1.markdown(f'<div class="metric-value">${price:.6f}</div>', unsafe_allow_html=True)
+        col1.markdown(
+            '<div class="metric-label">Option Price</div>', unsafe_allow_html=True
+        )
+        col1.markdown(
+            f'<div class="metric-value">${price:.6f}</div>', unsafe_allow_html=True
+        )
 
         col2.markdown('<div class="metric-label">Delta</div>', unsafe_allow_html=True)
-        col2.markdown(f'<div class="metric-value">{delta:.4f}</div>', unsafe_allow_html=True)
+        col2.markdown(
+            f'<div class="metric-value">{delta:.4f}</div>', unsafe_allow_html=True
+        )
 
         col3.markdown('<div class="metric-label">Gamma</div>', unsafe_allow_html=True)
-        col3.markdown(f'<div class="metric-value">{gamma:.6f}</div>', unsafe_allow_html=True)
+        col3.markdown(
+            f'<div class="metric-value">{gamma:.6f}</div>', unsafe_allow_html=True
+        )
 
         col4.markdown('<div class="metric-label">Time</div>', unsafe_allow_html=True)
-        col4.markdown(f'<div class="metric-value">{t_ms:.2f} ms</div>', unsafe_allow_html=True)
+        col4.markdown(
+            f'<div class="metric-value">{t_ms:.2f} ms</div>', unsafe_allow_html=True
+        )
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -716,86 +926,221 @@ if run:
         status_text.text(f"Generating price surface ({nS}×{nT} points)...")
         progress_bar.progress(40)
 
+        # Create grid for surface
         Sg = np.linspace(s_low, s_high, nS)
         Tg = np.linspace(t_low, t_high, nT)
 
-        # Use direct terminal simulation for surface
+        # Use optimized batch processing
         Sm, Tm, Z, deltas_grid, gammas_grid = generate_surface_data(
-            mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25, use_path_simulation=False
+            mc, Sg, Tg, K, r, sigma, option_type, q, batch_size=25
         )
 
         status_text.text(f"✅ Surface generated successfully")
         progress_bar.progress(60)
 
         # Create visualization tabs
-        tab1, tab2, tab3 = st.tabs(
-            ["Price Surface", "Greek Analysis", "Parameter Sensitivity"]
+        tab1, tab2, tab3, tab4 = st.tabs(
+            ["Price Surface", "Greek Analysis", "Parameter Sensitivity", "Performance"]
         )
 
+        # 3D Price Surface tab
         with tab1:
-            st.markdown('<h2 class="chart-title">Price Surface</h2>', unsafe_allow_html=True)
             st.markdown(
-                f'<p class="chart-description">Option price across spot price and time to maturity ({nS}×{nT} points, direct terminal simulation)</p>',
+                '<h2 class="chart-title">Price Surface</h2>', unsafe_allow_html=True
+            )
+            st.markdown(
+                f'<p class="chart-description">Option price across spot price and time to maturity dimensions ({nS}×{nT} points)</p>',
                 unsafe_allow_html=True,
             )
 
             fig_surface = create_price_surface(Sg, Tg, Z, K, option_type)
-            st.plotly_chart(fig_surface, use_container_width=True, config={"scrollZoom": True})
+            st.plotly_chart(
+                fig_surface, use_container_width=True, config={"scrollZoom": True}
+            )
 
+        # Greek Analysis tab
         with tab2:
-            st.markdown('<h2 class="chart-title">Greek Analysis</h2>', unsafe_allow_html=True)
             st.markdown(
-                f'<p class="chart-description">Delta and gamma visualization ({nS}×{nT} points)</p>',
+                '<h2 class="chart-title">Greek Analysis</h2>', unsafe_allow_html=True
+            )
+            st.markdown(
+                f'<p class="chart-description">Visualization of delta and gamma across the parameter space ({nS}×{nT} points)</p>',
                 unsafe_allow_html=True,
             )
 
-            fig_delta, fig_gamma = create_greeks_heatmap(Sg, Tg, deltas_grid, gammas_grid, K, option_type)
+            # Create Greek heatmaps
+            fig_delta, fig_gamma = create_greeks_heatmap(
+                Sg, Tg, deltas_grid, gammas_grid, K, option_type
+            )
 
-            st.markdown('<h3 class="subsection-header">Delta Heatmap</h3>', unsafe_allow_html=True)
+            # Display delta heatmap
+            st.markdown(
+                '<h3 class="subsection-header">Delta Heatmap</h3>',
+                unsafe_allow_html=True,
+            )
             st.plotly_chart(fig_delta, use_container_width=True)
 
-            st.markdown('<h3 class="subsection-header">Gamma Heatmap</h3>', unsafe_allow_html=True)
+            # Display gamma heatmap
+            st.markdown(
+                '<h3 class="subsection-header">Gamma Heatmap</h3>',
+                unsafe_allow_html=True,
+            )
             st.plotly_chart(fig_gamma, use_container_width=True)
 
+        # Parameter Sensitivity tab
         with tab3:
-            st.markdown('<h2 class="chart-title">Parameter Sensitivity</h2>', unsafe_allow_html=True)
             st.markdown(
-                f'<p class="chart-description">Analysis of how option price and Greeks change with parameters ({nS}×{nT} points)</p>',
+                '<h2 class="chart-title">Parameter Sensitivity</h2>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<p class="chart-description">Analysis of how option price and Greeks change with individual parameters ({nS}×{nT} points)</p>',
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<h3 class="subsection-header">Price Sensitivity</h3>', unsafe_allow_html=True)
+            # Price sensitivity
+            st.markdown(
+                '<h3 class="subsection-header">Price Sensitivity</h3>',
+                unsafe_allow_html=True,
+            )
+
             fig_price = go.Figure()
             fig_price.add_trace(
                 go.Scatter(
-                    x=Sg, y=Z[nT // 2, :], mode="lines+markers",
-                    name=f"T={Tg[nT//2]:.2f}", line=dict(color="#3B82F6", width=2.5),
+                    x=Sg,
+                    y=Z[nT // 2, :],
+                    mode="lines+markers",
+                    name=f"T={Tg[nT//2]:.2f}",
+                    line=dict(color="#3B82F6", width=2.5),
                 )
             )
             fig_price.update_layout(
                 title=f"Price Sensitivity (T={Tg[nT//2]:.2f}, K={K})",
-                xaxis_title="Spot Price (S)", yaxis_title="Option Price", height=400,
-                template="plotly_dark", paper_bgcolor="rgba(30,41,59,1)", plot_bgcolor="rgba(15,23,42,1)",
+                xaxis_title="Spot Price (S)",
+                yaxis_title="Option Price",
+                height=400,
+                template="plotly_dark",
+                paper_bgcolor="rgba(30,41,59,1)",
+                plot_bgcolor="rgba(15,23,42,1)",
+                font=dict(size=14),
             )
             st.plotly_chart(fig_price, use_container_width=True)
 
-            st.markdown('<h3 class="subsection-header">Delta Sensitivity</h3>', unsafe_allow_html=True)
-            fig_delta_sens = go.Figure()
-            fig_delta_sens.add_trace(
+            # Delta sensitivity
+            st.markdown(
+                '<h3 class="subsection-header">Delta Sensitivity</h3>',
+                unsafe_allow_html=True,
+            )
+
+            fig_delta = go.Figure()
+            fig_delta.add_trace(
                 go.Scatter(
-                    x=Sg, y=deltas_grid[nT // 2, :], mode="lines+markers",
-                    name=f"T={Tg[nT//2]:.2f}", line=dict(color="#3B82F6", width=2.5),
+                    x=Sg,
+                    y=deltas_grid[nT // 2, :],
+                    mode="lines+markers",
+                    name=f"T={Tg[nT//2]:.2f}",
+                    line=dict(color="#3B82F6", width=2.5),
                 )
             )
-            fig_delta_sens.add_hline(y=0, line_dash="dash", line_color="#F87171")
-            fig_delta_sens.update_layout(
+            fig_delta.add_hline(y=0, line_dash="dash", line_color="#F87171")
+            fig_delta.update_layout(
                 title=f"Delta Sensitivity (T={Tg[nT//2]:.2f}, K={K})",
-                xaxis_title="Spot Price (S)", yaxis_title="Delta", height=400,
-                template="plotly_dark", paper_bgcolor="rgba(30,41,59,1)", plot_bgcolor="rgba(15,23,42,1)",
+                xaxis_title="Spot Price (S)",
+                yaxis_title="Delta",
+                height=400,
+                template="plotly_dark",
+                paper_bgcolor="rgba(30,41,59,1)",
+                plot_bgcolor="rgba(15,23,42,1)",
+                font=dict(size=14),
             )
-            st.plotly_chart(fig_delta_sens, use_container_width=True)
+            st.plotly_chart(fig_delta, use_container_width=True)
 
-        # Final progress
+            # Gamma sensitivity
+            st.markdown(
+                '<h3 class="subsection-header">Gamma Sensitivity</h3>',
+                unsafe_allow_html=True,
+            )
+
+            fig_gamma = go.Figure()
+            fig_gamma.add_trace(
+                go.Scatter(
+                    x=Sg,
+                    y=gammas_grid[nT // 2, :],
+                    mode="lines+markers",
+                    name=f"T={Tg[nT//2]:.2f}",
+                    line=dict(color="#10B981", width=2.5),
+                )
+            )
+            fig_gamma.add_hline(y=0, line_dash="dash", line_color="#F87171")
+            fig_gamma.update_layout(
+                title=f"Gamma Sensitivity (T={Tg[nT//2]:.2f}, K={K})",
+                xaxis_title="Spot Price (S)",
+                yaxis_title="Gamma",
+                height=400,
+                template="plotly_dark",
+                paper_bgcolor="rgba(30,41,59,1)",
+                plot_bgcolor="rgba(15,23,42,1)",
+                font=dict(size=14),
+            )
+            st.plotly_chart(fig_gamma, use_container_width=True)
+
+        # Performance tab
+        with tab4:
+            st.markdown(
+                '<h2 class="chart-title">Performance Analysis</h2>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<p class="chart-description">Evaluation of computational efficiency and convergence properties</p>',
+                unsafe_allow_html=True,
+            )
+
+            # Performance metrics
+            col1, col2, col3 = st.columns(3)
+
+            col1.markdown(
+                '<div style="background-color: #1E293B; border-radius: 8px; padding: 1rem;">',
+                unsafe_allow_html=True,
+            )
+            col1.markdown(
+                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Execution Time</div>',
+                unsafe_allow_html=True,
+            )
+            col1.markdown(
+                f'<div style="color: white; font-size: 1.5rem; font-weight: 600; margin-top: 0.3rem;">{t_ms:.2f} ms</div>',
+                unsafe_allow_html=True,
+            )
+            col1.markdown("</div>", unsafe_allow_html=True)
+
+            col2.markdown(
+                '<div style="background-color: #1E293B; border-radius: 8px; padding: 1rem;">',
+                unsafe_allow_html=True,
+            )
+            col2.markdown(
+                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Simulations</div>',
+                unsafe_allow_html=True,
+            )
+            col2.markdown(
+                f'<div style="color: white; font-size: 1.5rem; font-weight: 600; margin-top: 0.3rem;">{num_sim:,}</div>',
+                unsafe_allow_html=True,
+            )
+            col2.markdown("</div>", unsafe_allow_html=True)
+
+            col3.markdown(
+                '<div style="background-color: #1E293B; border-radius: 8px; padding: 1rem;">',
+                unsafe_allow_html=True,
+            )
+            col3.markdown(
+                '<div style="color: #94A3B8; font-size: 0.85rem; font-weight: 500;">Surface Points</div>',
+                unsafe_allow_html=True,
+            )
+            col3.markdown(
+                f'<div style="color: white; font-size: 1.5rem; font-weight: 600; margin-top: 0.3rem;">{nS}×{nT}</div>',
+                unsafe_allow_html=True,
+            )
+            col3.markdown("</div>", unsafe_allow_html=True)
+
+        # Final progress update
         progress_bar.progress(100)
         time.sleep(0.2)
         status_text.text("✅ Analysis complete!")
@@ -810,6 +1155,21 @@ if run:
         with st.expander("Error Details"):
             st.code(traceback.format_exc())
 
+        st.markdown(
+            """
+        <div style="background-color: #1E293B; border-radius: 8px; padding: 1rem; border: 1px solid #334155; margin-top: 1rem;">
+            <h3 style="color: white; margin: 0 0 0.5rem 0;">Troubleshooting Tips</h3>
+            <ul style="color: #CBD5E1; padding-left: 1.2rem; margin-bottom: 0;">
+                <li>Click "Reboot app" in Streamlit Cloud to clear cached modules</li>
+                <li>Ensure all input values are valid (positive numbers, etc.)</li>
+                <li>Try reducing the simulation size if performance is poor</li>
+                <li>Disable GPU acceleration if you're not using a GPU instance</li>
+                <li>Check that all required dependencies are installed</li>
+            </ul>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
 else:
     st.markdown(
         """
