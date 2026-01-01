@@ -194,6 +194,67 @@ class MonteCarloPricerUni:
         gamma = (prices[2] - 2 * prices[1] + prices[0]) / (h**2)
         return delta, gamma
 
+    def price_batch(
+        self,
+        S_vals,
+        K_vals,
+        T_vals,
+        r_vals,
+        sigma_vals,
+        option_type: Literal["call", "put"],
+        q_vals=0.0,
+    ) -> np.ndarray:
+        """
+        Vectorized pricing for multiple points at once.
+        """
+        # Ensure q_vals is iterable or broadcast it
+        if isinstance(q_vals, (int, float)):
+             q_vals = np.full_like(S_vals, q_vals)
+
+        n = len(S_vals)
+        prices = np.zeros(n)
+        
+        for i in range(n):
+            prices[i] = self.price(
+                float(S_vals[i]), 
+                float(K_vals[i]), 
+                float(T_vals[i]), 
+                float(r_vals[i]), 
+                float(sigma_vals[i]), 
+                option_type, 
+                float(q_vals[i])
+            )
+        return prices
+
+    def delta_gamma_batch(
+        self, S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals=0.0, h=1e-4
+    ):
+        """
+        Vectorized Greek calculation for multiple points at once.
+        """
+        if isinstance(q_vals, (int, float)):
+            q_vals = np.full_like(S_vals, q_vals)
+            
+        n = len(S_vals)
+        deltas = np.zeros(n)
+        gammas = np.zeros(n)
+
+        for i in range(n):
+            d, g = self.delta_gamma(
+                float(S_vals[i]), 
+                float(K_vals[i]), 
+                float(T_vals[i]), 
+                float(r_vals[i]), 
+                float(sigma_vals[i]), 
+                option_type, 
+                float(q_vals[i]),
+                h=h
+            )
+            deltas[i] = d
+            gammas[i] = g
+            
+        return deltas, gammas
+
 
 # ML Surrogate
 class MLSurrogate:
