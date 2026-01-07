@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "opset_version": 15,
+  "input_names": [
+    "input"
+  ],
+  "output_names": [
+    "output"
+  ],
+  "feature_names": [
+    "S",
+    "K",
+    "T",
+    "r",
+    "sigma",
+    "q",
+    "moneyness",
+    "log_moneyness",
+    "sqrt_T",
+    "T_sigma"
+  ],
+  "model_size_bytes": 1703355,
+  "warnings": []
+}

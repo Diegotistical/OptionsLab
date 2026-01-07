@@ -44,6 +44,29 @@ except ImportError:
     black_scholes = None
     LIGHTGBM_AVAILABLE = False
 
+# Optimization module imports
+OPTUNA_AVAILABLE = False
+ONNX_AVAILABLE = False
+
+try:
+    import optuna
+    from src.optimization import (
+        OptunaStudyManager,
+        LightGBMSearchSpace,
+        ONNXExporter,
+        ONNXValidator,
+        ONNXInferenceEngine,
+    )
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    import onnxruntime
+    ONNX_AVAILABLE = True
+except ImportError:
+    pass
+
 apply_custom_css()
 
 
@@ -81,7 +104,14 @@ def bs_gamma(S, K, T, r, sigma, q=0.0):
 # =============================================================================
 page_header("ML Surrogate Model", "Train LightGBM models for instant option pricing predictions")
 
-st.markdown(f"**LightGBM:** {'✅ Available' if LIGHTGBM_AVAILABLE else '⚠️ Using sklearn fallback'}")
+# Feature availability badges
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown(f"**LightGBM:** {'✅ Available' if LIGHTGBM_AVAILABLE else '⚠️ sklearn fallback'}")
+with col2:
+    st.markdown(f"**Optuna:** {'✅ Available' if OPTUNA_AVAILABLE else '❌ Not installed'}")
+with col3:
+    st.markdown(f"**ONNX Runtime:** {'✅ Available' if ONNX_AVAILABLE else '❌ Not installed'}")
 
 section_divider()
 
@@ -89,6 +119,12 @@ section_divider()
 # INPUT SECTION
 # =============================================================================
 st.markdown('<div class="input-section">', unsafe_allow_html=True)
+
+# Check if we have optimized params to use
+has_optimized = "optuna_result" in st.session_state
+if has_optimized:
+    opt_params = st.session_state["optuna_result"].best_params
+    st.success(f"✅ Using optimized hyperparameters from Optuna study")
 
 col1, col2, col3, col4 = st.columns([1.2, 1.2, 1.2, 1])
 
@@ -114,12 +150,20 @@ with col3:
         value=10000,
         key="ml_samples"
     )
+    
+    # Default values (or from Optuna if available)
+    default_trees = opt_params.get("n_estimators", 300) if has_optimized else 300
+    default_depth = opt_params.get("max_depth", 8) if has_optimized else 8
+    default_lr = opt_params.get("learning_rate", 0.1) if has_optimized else 0.1
+    
     n_estimators = st.select_slider(
         "Model Trees",
-        options=[100, 200, 300, 500, 1000],
-        value=300,
+        options=[100, 200, 300, 400, 500, 750, 1000],
+        value=min([100, 200, 300, 400, 500, 750, 1000], key=lambda x: abs(x - default_trees)),
         key="ml_trees"
     )
+    max_depth = st.slider("Tree Depth", min_value=3, max_value=12, value=default_depth, key="ml_depth")
+    learning_rate = st.slider("Learning Rate", min_value=0.01, max_value=0.3, value=default_lr, step=0.01, key="ml_lr")
 
 with col4:
     st.markdown("**Actions**")
@@ -138,14 +182,14 @@ if train_btn:
     
     progress = st.progress(0, text="Initializing...")
     
-    # Create surrogate with more trees
+    # Create surrogate with UI params
     progress.progress(10, text="Creating ML surrogate...")
     
     t_start = time.perf_counter()
     surrogate = MonteCarloMLSurrogate(
         n_estimators=n_estimators,
-        max_depth=8,  # Deeper trees for better accuracy
-        learning_rate=0.1,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
         seed=42
     )
     
@@ -416,3 +460,228 @@ else:
         </p>
     </div>
     """, unsafe_allow_html=True)
+
+# OPTUNA OPTIMIZATION & ONNX EXPORT
+
+section_divider()
+
+st.markdown("### 🔧 Advanced Features")
+
+if OPTUNA_AVAILABLE or ONNX_AVAILABLE:
+    adv_tab1, adv_tab2 = st.tabs(["⚡ Hyperparameter Optimization", "📦 Model Export (ONNX)"])
+    
+    with adv_tab1:
+        if OPTUNA_AVAILABLE:
+            st.markdown("""
+            **Optuna Hyperparameter Tuning**
+            
+            Automatically find optimal hyperparameters for the LightGBM surrogate model using 
+            Bayesian optimization with pruning.
+            """)
+            
+            opt_col1, opt_col2 = st.columns(2)
+            
+            with opt_col1:
+                n_trials = st.slider("Number of Trials", min_value=5, max_value=100, value=20, step=5, key="opt_trials")
+                opt_study_name = st.text_input("Study Name", value="mc_ml_study", key="opt_study_name")
+            
+            with opt_col2:
+                opt_n_samples = st.select_slider(
+                    "Training Samples per Trial",
+                    options=[2000, 5000, 10000],
+                    value=5000,
+                    key="opt_samples"
+                )
+                opt_seed = st.number_input("Random Seed", min_value=0, max_value=9999, value=42, key="opt_seed")
+            
+            optimize_btn = st.button("🚀 Run Optimization Study", type="primary", key="run_optuna")
+            
+            if optimize_btn:
+                with st.spinner(f"Running {n_trials} Optuna trials..."):
+                    try:
+                        # Create study manager
+                        study_path = ROOT / "models" / "optimization_results"
+                        study_path.mkdir(parents=True, exist_ok=True)
+                        
+                        manager = OptunaStudyManager(
+                            study_name=opt_study_name,
+                            storage=f"sqlite:///{study_path / 'optuna_studies.db'}",
+                            seed=opt_seed,
+                        )
+                        
+                        search_space = LightGBMSearchSpace(
+                            n_estimators_range=(100, 500),
+                            max_depth_range=(4, 10),
+                            learning_rate_range=(0.01, 0.2),
+                        )
+                        
+                        # Simple objective for demonstration
+                        def objective(trial, trial_seed):
+                            params = {k: v for k, v in trial.params.items()}
+                            
+                            model = MonteCarloMLSurrogate(
+                                n_estimators=params.get("n_estimators", 200),
+                                max_depth=params.get("max_depth", 6),
+                                learning_rate=params.get("learning_rate", 0.1),
+                                seed=trial_seed,
+                            )
+                            model.fit(n_samples=opt_n_samples, option_type="call", verbose=False)
+                            
+                            # Score on test points
+                            test_spots = np.linspace(80, 120, 10)
+                            errors = []
+                            for s in test_spots:
+                                pred = model.predict_single(s, 100, 1.0, 0.05, 0.2, 0.0)
+                                true_price = bs_price(s, 100, 1.0, 0.05, 0.2, "call")
+                                errors.append(abs(pred["price"] - true_price))
+                            
+                            return np.mean(errors)
+                        
+                        result = manager.optimize(
+                            objective=objective,
+                            search_space=search_space,
+                            n_trials=n_trials,
+                            show_progress_bar=False,
+                        )
+                        
+                        # Store in session state
+                        st.session_state["optuna_result"] = result
+                        
+                        # Display results
+                        st.success(f"✅ Optimization complete! Best score: {result.best_value:.6f}")
+                        
+                        res_col1, res_col2 = st.columns(2)
+                        with res_col1:
+                            st.markdown("**Best Hyperparameters:**")
+                            st.json(result.best_params)
+                        
+                        with res_col2:
+                            st.markdown("**Study Statistics:**")
+                            st.markdown(f"""
+                            - **Trials:** {result.n_trials}
+                            - **Complete:** {result.n_complete}
+                            - **Pruned:** {result.n_pruned}
+                            - **Duration:** {result.duration_seconds:.1f}s
+                            """)
+                        
+                        # Save results
+                        result.save(study_path / f"{opt_study_name}_result.json")
+                        st.info(f"📁 Results saved to `models/optimization_results/{opt_study_name}_result.json`")
+                        
+                    except Exception as e:
+                        st.error(f"Optimization failed: {str(e)}")
+        else:
+            st.warning("⚠️ Optuna not installed. Run `pip install optuna` to enable hyperparameter optimization.")
+    
+    with adv_tab2:
+        if ONNX_AVAILABLE and OPTUNA_AVAILABLE:
+            st.markdown("""
+            **ONNX Model Export**
+            
+            Export trained models to ONNX format for:
+            - Faster inference in production
+            - Cross-platform deployment
+            - Integration with other systems
+            """)
+            
+            # Check if we have a trained model in session state
+            if "optuna_result" in st.session_state:
+                best_params = st.session_state["optuna_result"].best_params
+                st.success(f"✅ Using optimized parameters from study")
+                st.json(best_params)
+                
+                export_btn = st.button("📦 Export to ONNX", type="primary", key="export_onnx")
+                
+                if export_btn:
+                    with st.spinner("Exporting model to ONNX..."):
+                        try:
+                            # Train model with best params
+                            model = MonteCarloMLSurrogate(
+                                n_estimators=best_params.get("n_estimators", 200),
+                                max_depth=best_params.get("max_depth", 6),
+                                learning_rate=best_params.get("learning_rate", 0.1),
+                                seed=42,
+                            )
+                            model.fit(n_samples=10000, option_type="call", verbose=False)
+                            
+                            # Export
+                            onnx_path = ROOT / "models" / "saved_models" / "mc_ml_surrogate.onnx"
+                            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            feature_names = model.feature_names
+                            
+                            # Use sklearn export since model is a Pipeline
+                            export_result = ONNXExporter.export_sklearn(
+                                model=model.model,
+                                output_path=onnx_path,
+                                feature_names=feature_names,
+                            )
+                            
+                            if export_result.success:
+                                st.success(f"✅ Model exported to `{onnx_path}`")
+                                st.markdown(f"**Model size:** {export_result.model_size_bytes / 1024:.1f} KB")
+                                
+                                # Validate
+                                st.markdown("**Validation:**")
+                                test_X = np.random.rand(100, len(feature_names)).astype(np.float32)
+                                validator = ONNXValidator(rtol=1e-3, atol=1e-4)
+                                validation = validator.validate(
+                                    native_model=model.model,
+                                    onnx_path=onnx_path,
+                                    X_test=test_X,
+                                )
+                                
+                                if validation.passed:
+                                    st.success(f"✅ Validation passed (correlation: {validation.pearson_correlation:.6f})")
+                                else:
+                                    st.warning(f"⚠️ Validation warning: {validation.diagnostics}")
+                            else:
+                                st.error(f"Export failed: {export_result.error}")
+                                
+                        except Exception as e:
+                            st.error(f"Export failed: {str(e)}")
+            else:
+                st.info("👆 Run an optimization study first to get optimized hyperparameters for export.")
+                
+            # Load existing ONNX model
+            section_divider()
+            st.markdown("**Load Existing ONNX Model**")
+            
+            onnx_files = list((ROOT / "models" / "saved_models").glob("*.onnx")) if (ROOT / "models" / "saved_models").exists() else []
+            
+            if onnx_files:
+                selected_onnx = st.selectbox(
+                    "Select ONNX model",
+                    options=[f.name for f in onnx_files],
+                    key="select_onnx"
+                )
+                
+                if st.button("🔄 Load ONNX Model", key="load_onnx"):
+                    onnx_path = ROOT / "models" / "saved_models" / selected_onnx
+                    engine = ONNXInferenceEngine(onnx_path)
+                    st.session_state["onnx_engine"] = engine
+                    st.success(f"✅ Loaded {selected_onnx}")
+                    st.json(engine.get_model_info())
+            else:
+                st.info("No ONNX models found in `models/saved_models/`")
+        else:
+            missing = []
+            if not ONNX_AVAILABLE:
+                missing.append("onnxruntime")
+            if not OPTUNA_AVAILABLE:
+                missing.append("optuna")
+            st.warning(f"⚠️ Missing dependencies: {', '.join(missing)}. Run `pip install {' '.join(missing)}`")
+
+else:
+    st.info("""
+    **Advanced features require additional packages:**
+    
+    ```bash
+    pip install optuna onnx onnxruntime onnxmltools
+    ```
+    
+    These enable:
+    - **Optuna**: Automatic hyperparameter optimization
+    - **ONNX**: Model export for production deployment
+    """)
+
