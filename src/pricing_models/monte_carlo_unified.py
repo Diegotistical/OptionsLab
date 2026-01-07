@@ -590,21 +590,23 @@ class MonteCarloPricerUni:
             q_vals = np.asarray(q_vals, dtype=np.float64)
         
         n = len(S_vals)
-        prices = np.zeros(n)
         
-        # Simulate all terminal prices at once
+        # Simulate all terminal prices at once - shape (n, 2*num_sims)
         terminal_prices = self._simulate_terminal_prices(
             S_vals, T_vals, r_vals, sigma_vals, q_vals
         )
         
-        # Compute payoffs and prices for each option
-        is_call = option_type == "call"
-        for i in range(n):
-            if is_call:
-                payoffs = np.maximum(terminal_prices[i] - K_vals[i], 0.0)
-            else:
-                payoffs = np.maximum(K_vals[i] - terminal_prices[i], 0.0)
-            prices[i] = np.exp(-r_vals[i] * T_vals[i]) * np.mean(payoffs)
+        # FULLY VECTORIZED payoff calculation - O(n) with broadcasting
+        # terminal_prices: (n, num_sims*2), K_vals: (n,)
+        # Use broadcasting: K_vals[:, None] creates (n, 1) for subtraction
+        if option_type == "call":
+            payoffs = np.maximum(terminal_prices - K_vals[:, None], 0.0)
+        else:
+            payoffs = np.maximum(K_vals[:, None] - terminal_prices, 0.0)
+        
+        # Vectorized discounting and mean - no loop needed
+        discount_factors = np.exp(-r_vals * T_vals)
+        prices = discount_factors * np.mean(payoffs, axis=1)
         
         return prices
 
@@ -620,7 +622,10 @@ class MonteCarloPricerUni:
         h: float = 1e-4,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Vectorized Delta and Gamma calculation for multiple options.
+        Fully vectorized Delta and Gamma calculation.
+
+        Uses central differences with the same random seed for
+        variance reduction (Common Random Numbers).
 
         Args:
             S_vals: Array of spot prices.
@@ -635,31 +640,31 @@ class MonteCarloPricerUni:
         Returns:
             Tuple of (deltas, gammas) arrays.
         """
+        S_vals = np.asarray(S_vals, dtype=np.float64)
+        K_vals = np.asarray(K_vals, dtype=np.float64)
+        T_vals = np.asarray(T_vals, dtype=np.float64)
+        r_vals = np.asarray(r_vals, dtype=np.float64)
+        sigma_vals = np.asarray(sigma_vals, dtype=np.float64)
+        
         if isinstance(q_vals, (int, float)):
             q_vals = np.full_like(S_vals, q_vals)
+        else:
+            q_vals = np.asarray(q_vals, dtype=np.float64)
         
-        n = len(S_vals)
-        deltas = np.zeros(n)
-        gammas = np.zeros(n)
+        # Compute prices at S-h, S, S+h using same seed (CRN)
+        prices_down = self.price_batch(
+            S_vals - h, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals
+        )
+        prices_mid = self.price_batch(
+            S_vals, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals
+        )
+        prices_up = self.price_batch(
+            S_vals + h, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals
+        )
         
-        for i in range(n):
-            try:
-                d, g = self.delta_gamma(
-                    float(S_vals[i]),
-                    float(K_vals[i]),
-                    float(T_vals[i]),
-                    float(r_vals[i]),
-                    float(sigma_vals[i]),
-                    option_type,
-                    float(q_vals[i]),
-                    h,
-                )
-                deltas[i] = d
-                gammas[i] = g
-            except Exception as e:
-                logger.warning(f"Greeks calculation failed for point {i}: {e}")
-                deltas[i] = 0.0
-                gammas[i] = 0.0
+        # Vectorized finite differences
+        deltas = (prices_up - prices_down) / (2 * h)
+        gammas = (prices_up - 2 * prices_mid + prices_down) / (h ** 2)
         
         return deltas, gammas
 

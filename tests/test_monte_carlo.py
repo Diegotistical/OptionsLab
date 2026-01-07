@@ -302,7 +302,7 @@ class TestMonteCarloMLSurrogate:
         )
         
         assert not surrogate.trained
-        assert surrogate.mc_pricer is not None
+        # Note: mc_pricer removed - we use vectorized BS for training now
 
     def test_generate_training_data(self):
         """Test training data generation."""
