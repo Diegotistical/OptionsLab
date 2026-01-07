@@ -1,807 +1,425 @@
-import json
-import logging
-import math
-import os
-import sys
-import time
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+# streamlit_app/pages/volatility_surface.py
+"""
+Volatility Surface - Streamlit Page.
 
-import joblib
+ML-based implied volatility surface modeling and visualization.
+"""
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import time
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from scipy.interpolate import griddata
+from scipy.stats import norm
 import streamlit as st
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
 
-# Optional sklearn estimators as fallback
-from sklearn.neural_network import MLPRegressor
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVR
+st.set_page_config(
+    page_title="Volatility Surface",
+    page_icon="🌊",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# Optional xgboost
 try:
-    from xgboost import XGBRegressor
-
-    XGBOOST_AVAILABLE = True
-except Exception:
-    XGBOOST_AVAILABLE = False
-
-# Optional scipy surface generator
-try:
-    from scipy.interpolate import RectBivariateSpline
-
-    SCIPY_AVAILABLE = True
-except Exception:
-    SCIPY_AVAILABLE = False
-
-# =============================
-# Path Setup (for Streamlit Cloud + Local Dev)
-# =============================
-BASE_DIR = Path(__file__).resolve().parent
-SRC_DIRS = [
-    BASE_DIR / "src",  # local dev (if src is inside pages/)
-    BASE_DIR.parent / "src",  # streamlit cloud layout (src next to streamlit_app/)
-    BASE_DIR.parent.parent / "src",  # alternative cloud layout (src at project root)
-    BASE_DIR,  # current dir (fallback)
-]
-
-for p in SRC_DIRS:
-    if p.exists() and str(p) not in sys.path:
-        sys.path.insert(0, str(p))
-        logger.info(f"Inserted {p} into sys.path")  # Log which path was added
-
-# Logging Setup
-logger = logging.getLogger("vol_surface_app")  # Use a consistent logger name
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logger.addHandler(h)
-
-# Model Imports and Availability Check
-try:
-    from volatility_surface.models.mlp_model import MLPModel as ProjectMLPModel
-    from volatility_surface.models.random_forest import (
-        RandomForestVolatilityModel as ProjectRFModel,
+    from components import (
+        apply_custom_css, page_header, section_divider,
+        get_chart_layout, format_time_ms
     )
-    from volatility_surface.models.svr_model import SVRModel as ProjectSVRModel
-    from volatility_surface.models.xgboost_model import (
-        XGBVolatilityModel as ProjectXGBModel,
+except ImportError:
+    from streamlit_app.components import (
+        apply_custom_css, page_header, section_divider,
+        get_chart_layout, format_time_ms
     )
 
-    # from volatility_surface.surface_generator import VolatilitySurfaceGenerator # Not used in this file
-    PROJECT_MODELS_AVAILABLE = True
-    logger.info("✓ Project models imported successfully")
-except Exception as e:
-    logger.error(f"Project model import failed: {e}")
-    PROJECT_MODELS_AVAILABLE = False
-    # Set project models to None if import fails
-    ProjectMLPModel = ProjectRFModel = ProjectSVRModel = ProjectXGBModel = None
+apply_custom_css()
 
-# =============================
-# App constants & storage
-# =============================
-APP_ROOT = (
-    Path(__file__).resolve().parent
-)  # Directory where this script (volatility_surface.py) resides
-# --- FIX: Change MODEL_DIR to your desired path ---
-# Go up from pages/ to streamlit_app/, then to the project root (OptionsLab), then to models/saved_models
-PROJECT_ROOT = (
-    APP_ROOT.parent.parent
-)  # Adjust based on actual structure if needed, but this is common
-MODEL_DIR = PROJECT_ROOT / "models" / "saved_models"
-# --- END FIX ---
-MODEL_DIR.mkdir(
-    parents=True, exist_ok=True
-)  # Ensure the directory exists, create parents if needed
-REGISTRY_PATH = MODEL_DIR / "registry.json"
+# =============================================================================
+# ML MODEL IMPORTS
+# =============================================================================
+try:
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+    from sklearn.svm import SVR
+    from sklearn.neural_network import MLPRegressor
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
 
-FEATURE_COLUMNS = [
-    "moneyness",
-    "log_moneyness",
-    "time_to_maturity",
-    "ttm_squared",
-    "risk_free_rate",
-    "historical_volatility",
-    "volatility_skew",
-]
-TARGET_COLUMN = "implied_volatility"
-DEFAULT_SEED = 42
+try:
+    import xgboost as xgb
+    XGB_AVAILABLE = True
+except ImportError:
+    XGB_AVAILABLE = False
 
 
-# =============================
-# Registry helpers
-# =============================
-def load_registry() -> Dict[str, Any]:
-    if REGISTRY_PATH.exists():
-        try:
-            return json.loads(REGISTRY_PATH.read_text())
-        except Exception:
-            return {}
-    return {}
+# =============================================================================
+# VECTORIZED SURFACE CALCULATIONS
+# =============================================================================
 
-
-def save_registry(reg: Dict[str, Any]):
-    REGISTRY_PATH.write_text(json.dumps(reg, indent=2, default=str))
-
-
-# =============================
-# Estimator / Project-model factory
-# =============================
-def create_model_instance(name: str, **kwargs):
-    """
-    Return either a project model instance if available (preferred),
-    or a sklearn/xgboost estimator instance as a fallback.
-    This is used for prediction and saving/loading.
-    """
-    lname = name.lower()
-    # Try project models first
-    if PROJECT_MODELS_AVAILABLE:
-        try:
-            if "mlp" in lname and ProjectMLPModel is not None:
-                return ProjectMLPModel(**(kwargs or {}))
-            if ("forest" in lname or "random" in lname) and ProjectRFModel is not None:
-                return ProjectRFModel(**(kwargs or {}))
-            if "svr" in lname and ProjectSVRModel is not None:
-                return ProjectSVRModel(**(kwargs or {}))
-            if ("xgboost" in lname or "xgb" in lname) and ProjectXGBModel is not None:
-                return ProjectXGBModel(**(kwargs or {}))
-        except Exception as e:
-            logger.warning(
-                "Project-model instantiation failed for %s: %s. Falling back.", name, e
-            )
-
-    # Fallback: sklearn/xgboost
-    if "mlp" in lname:
-        hidden = kwargs.get("hidden_layer_sizes", (64, 64))
-        max_iter = kwargs.get("max_iter", 400)
-        return MLPRegressor(
-            hidden_layer_sizes=hidden,
-            max_iter=max_iter,
-            early_stopping=True,
-            random_state=DEFAULT_SEED,
-        )
-    if "forest" in lname or "random" in lname:
-        n = kwargs.get("n_estimators", 200)
-        return RandomForestRegressor(
-            n_estimators=n, n_jobs=-1, random_state=DEFAULT_SEED
-        )
-    if "svr" in lname:
-        c = kwargs.get("C", 1.0)
-        kernel = kwargs.get("kernel", "rbf")
-        return SVR(C=c, kernel=kernel)
-    if "xgboost" in lname or "xgb" in lname:
-        if XGBOOST_AVAILABLE:
-            n = kwargs.get("n_estimators", 200)
-            return XGBRegressor(
-                n_estimators=n, objective="reg:squarederror", random_state=DEFAULT_SEED
-            )
-        else:
-            logger.warning(
-                "XGBoost requested but not installed; using RandomForest fallback."
-            )
-            return RandomForestRegressor(
-                n_estimators=200, n_jobs=-1, random_state=DEFAULT_SEED
-            )
-    # default fallback
-    return RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=DEFAULT_SEED)
-
-
-# =============================
-# Data generation & fallback prediction
-# =============================
-def generate_fallback_data(
-    n_samples: int = 1500, seed: int = DEFAULT_SEED
-) -> pd.DataFrame:
+def generate_iv_surface_vectorized(
+    n_strikes: int = 20,
+    n_maturities: int = 15,
+    atm_vol: float = 0.20,
+    skew: float = -0.10,
+    term_slope: float = -0.02,
+    smile_curvature: float = 0.05,
+    seed: int = 42
+) -> tuple:
+    """Generate synthetic IV surface with realistic features."""
     rng = np.random.default_rng(seed)
-    spots = rng.uniform(90, 110, n_samples)
-    strikes = rng.uniform(80, 120, n_samples)
-    ttms = rng.uniform(0.1, 2.0, n_samples)
-    moneyness = spots / strikes
-    ivs = (
-        0.2
-        + 0.05 * np.sin(2 * np.pi * moneyness) * np.exp(-ttms)
-        + 0.03 * (moneyness - 1) ** 2
-    )
-    ivs += rng.normal(0, 0.07, n_samples)
-    ivs = np.clip(ivs, 0.03, 0.6)
-    df = pd.DataFrame(
-        {
-            "underlying_price": spots,
-            "strike_price": strikes,
-            "time_to_maturity": ttms,
-            "risk_free_rate": rng.uniform(0.01, 0.05, n_samples),
-            "historical_volatility": rng.uniform(0.12, 0.28, n_samples),
-            "implied_volatility": ivs,
-        }
-    )
-    df["moneyness"] = df["underlying_price"] / df["strike_price"]
-    df["log_moneyness"] = np.log(np.clip(df["moneyness"], 1e-12, None))
-    df["ttm_squared"] = df["time_to_maturity"] ** 2
-    df["volatility_skew"] = df["implied_volatility"] - df["historical_volatility"]
-    return df
+    
+    moneyness = np.linspace(0.8, 1.2, n_strikes)
+    maturities = np.linspace(0.05, 2.0, n_maturities)
+    
+    M, T = np.meshgrid(moneyness, maturities)
+    
+    # Build IV surface (all vectorized)
+    iv = np.full_like(M, atm_vol)
+    iv += skew * (1 - M)  # Skew
+    iv += smile_curvature * (M - 1) ** 2  # Smile
+    iv += term_slope * np.log(T + 0.1)  # Term structure
+    iv += rng.normal(0, 0.005, iv.shape)  # Small noise
+    iv = np.maximum(iv, 0.05)  # Ensure positive
+    
+    return moneyness, maturities, iv, M, T
 
 
-def generate_fallback_prediction(df: pd.DataFrame) -> np.ndarray:
-    m = df["moneyness"].to_numpy()
-    t = df["time_to_maturity"].to_numpy()
-    base = 0.2 + 0.05 * np.sin(2 * np.pi * m) * np.exp(-t)
-    smile = 0.03 * (m - 1.0) ** 2
-    return np.clip(base + smile, 0.03, 0.6)
+def create_training_data(M, T, iv):
+    """Create training data for ML models."""
+    X = np.column_stack([M.ravel(), T.ravel()])
+    y = iv.ravel()
+    return X, y
 
 
-# =============================
-# Prediction wrapper
-# =============================
-def safe_predict(model_obj, df: pd.DataFrame) -> np.ndarray:
-    """
-    Accept either a project-model instance (which may have predict_volatility/predict)
-    or a sklearn Pipeline/estimator. Returns numpy array of predictions or fallback.
-    """
-    if df is None:
-        raise ValueError("df must be provided for prediction")
-
-    # Project models often provide predict_volatility
-    try:
-        if hasattr(model_obj, "predict_volatility"):
-            # Some project methods accept df and return numpy
-            return np.asarray(model_obj.predict_volatility(df))
-        if hasattr(model_obj, "predict"):
-            return np.asarray(
-                model_obj.predict(
-                    df if isinstance(df, np.ndarray) else df[FEATURE_COLUMNS]
-                )
-            )
-        # If model stores pipeline attribute
-        if hasattr(model_obj, "pipeline"):
-            return np.asarray(model_obj.pipeline.predict(df[FEATURE_COLUMNS]))
-    except RuntimeError as e:
-        # detect 'not trained' messages from project base
-        if "not trained" in str(e).lower():
-            logger.warning("Model not trained: %s", e)
-            return generate_fallback_prediction(df)
-        raise
-    except Exception as e:
-        logger.error("Prediction error: %s", e)
-
-    # fallback
-    return generate_fallback_prediction(df)
-
-
-# =============================
-# Model persistence helpers (support project model save/load if available)
-# =============================
-def save_model_ui(name: str, model_obj: Any) -> Optional[str]:
-    """
-    Try to save using project's methods first (save / _save_model_impl / _save), else joblib.
-    Returns path or None.
-    """
-    filename = f"{name}.joblib"
-    path = str(MODEL_DIR / filename)
-    try:
-        if hasattr(model_obj, "save") and callable(getattr(model_obj, "save")):
-            # Some project models implement a save() high-level API
-            try:
-                model_obj.save(str(MODEL_DIR / name))
-                reg = load_registry()
-                reg[name] = {"path": filename, "saved_at": time.time()}
-                save_registry(reg)
-                return path
-            except Exception:
-                # fallback to lower-level
-                pass
-
-        # Some project models implement _save_model_impl(model_path, scaler_path)
-        if hasattr(model_obj, "_save_model_impl"):
-            model_path = str(MODEL_DIR / f"{name}_model.pkl")
-            scaler_path = str(MODEL_DIR / f"{name}_scaler.pkl")
-            try:
-                model_obj._save_model_impl(model_path, scaler_path)
-                reg = load_registry()
-                reg[name] = {
-                    "path": filename,
-                    "saved_at": time.time(),
-                    "model_path": model_path,
-                    "scaler_path": scaler_path,
-                }
-                save_registry(reg)
-                return path
-            except Exception as e:
-                logger.warning("Project _save_model_impl failed: %s", e)
-
-        # As final fallback use joblib for sklearn-style estimators or entire object
-        joblib.dump(model_obj, path)
-        reg = load_registry()
-        reg[name] = {"path": filename, "saved_at": time.time()}
-        save_registry(reg)
-        return path
-    except Exception as e:
-        logger.error("Failed to save model: %s", e)
-        return None
-
-
-def load_model_ui(name: str) -> Optional[Any]:
-    """
-    Load a model saved by save_model_ui. For project models we try to restore using _load_model_impl if available.
-    Otherwise we joblib.load.
-    """
-    reg = load_registry()
-    entry = reg.get(name)
-    if not entry:
-        return None
-    try:
-        # If entry has explicit model_path & scaler_path try to use project's class loader
-        model_path = entry.get("model_path")
-        scaler_path = entry.get("scaler_path")
-        if model_path and scaler_path:
-            # Try to instantiate corresponding project model by name
-            # Heuristic: pick a class based on name patterns
-            lname = name.lower()
-            inst = None
-            if "mlp" in lname and ProjectMLPModel is not None:
-                inst = ProjectMLPModel()
-            elif (
-                "forest" in lname or "random" in lname
-            ) and ProjectRFModel is not None:
-                inst = ProjectRFModel()
-            elif "svr" in lname and ProjectSVRModel is not None:
-                inst = ProjectSVRModel()
-            elif ("xgb" in lname or "xgboost" in lname) and ProjectXGBModel is not None:
-                inst = ProjectXGBModel()
-
-            if inst is not None and hasattr(inst, "_load_model_impl"):
-                inst._load_model_impl(model_path, scaler_path)
-                return inst
-
-        # generic joblib path
-        path = MODEL_DIR / entry["path"]
-        if path.exists():
-            return joblib.load(path)
-    except Exception as e:
-        logger.error("Failed to load model %s: %s", name, e)
-    return None
-
-
-# =============================
-# Grid builder & viz
-# =============================
-def build_prediction_grid(
-    m_start=0.7, m_end=1.3, m_steps=40, t_start=0.05, t_end=2.0, t_steps=40
-):
-    m = np.linspace(m_start, m_end, m_steps)
-    t = np.linspace(t_start, t_end, t_steps)
-    M, T = np.meshgrid(m, t, indexing="xy")
-    flat_m = M.ravel()
-    flat_t = T.ravel()
-    grid_df = pd.DataFrame(
-        {
-            "moneyness": flat_m,
-            "log_moneyness": np.log(np.clip(flat_m, 1e-12, None)),
-            "time_to_maturity": flat_t,
-            "ttm_squared": flat_t**2,
-            "risk_free_rate": np.full(flat_m.shape, 0.03),
-            "historical_volatility": np.full(flat_m.shape, 0.2),
-            "volatility_skew": np.zeros(flat_m.shape),
-        }
-    )
-    return M, T, grid_df
-
-
-def fig_surface(M, T, Z, title="Volatility Surface"):
-    fig = go.Figure(go.Surface(x=M, y=T, z=Z))
-    fig.update_layout(
-        title=title,
-        template="plotly_dark",
-        height=650,
-        scene=dict(
-            xaxis_title="Moneyness",
-            yaxis_title="Time to Maturity",
-            zaxis_title="Implied Vol",
-        ),
-    )
-    return fig
-
-
-# =============================
-# UI helpers
-# =============================
-def setup_dark_theme():
-    st.markdown(
-        """
-    <style>
-    .stApp { background: linear-gradient(135deg, #0c0d13 0%, #1a1d29 100%); max-width: 100% !important; }
-    .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 100% !important; }
-    .section { background: rgba(30,33,48,0.9); border-radius: 10px; padding: 1.25rem; margin: 0.75rem 0; }
-    .center { display:flex; justify-content:center; align-items:center; }
-    .controls { max-width: 1100px; width: 100%; }
-    .btn-full { width:100%; padding: 0.45rem 0; border-radius:6px; }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-# =============================
-# Main page
-# =============================
-def main():
-    st.set_page_config(page_title="Volatility Surface Explorer", layout="wide")
-    setup_dark_theme()
-
-    # Header
-    st.markdown(
-        """
-        <div style="background: linear-gradient(90deg,#253149 0%, #15202b 100%); padding: 18px; border-radius: 8px;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 22px;">Volatility Surface Explorer</h1>
-            <p style="color: #c8d0da; margin: 4px 0 0 0; font-size: 13px;">Train, save, load and inspect volatility surface models.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Status / debug: only show import details if models not present
-    # PROJECT_MODELS_AVAILABLE is now guaranteed to be defined from the import section
-    if not PROJECT_MODELS_AVAILABLE:
-        with st.expander("Import diagnostics", expanded=False):
-            st.write(
-                "Project models were not importable. Fallback to sklearn/XGBoost will be used."
-            )
-            # The specific error is logged, so we don't need to show it here unless needed.
-            st.write("Checked src path: Attempted standard paths from script location.")
-    else:
-        # Optional: Show success message if models were imported
-        st.success("Project models loaded successfully.")
-
-    # Controls centered & full width
-    st.markdown('<div class="center"><div class="controls">', unsafe_allow_html=True)
-
-    # Configuration row
-    cfg_cols = st.columns([1, 1, 1])
-    with cfg_cols[0]:
-        use_generator = st.checkbox(
-            "Use surface generator (scipy required)", value=False
-        )
-        dataset_size = st.slider(
-            "Dataset size", min_value=200, max_value=5000, value=1500, step=100
-        )
-    with cfg_cols[1]:
-        model_choice = st.selectbox(
-            "Model", ["MLP Neural Network", "Random Forest", "SVR", "XGBoost"], index=1
-        )
-        m_steps = st.slider("Moneyness steps", 12, 120, 40)
-    with cfg_cols[2]:
-        t_steps = st.slider("TTM steps", 6, 80, 30)
-        spot = st.number_input("Spot price (assumption)", value=100.0, format="%.2f")
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    # Generate / load data and train buttons (centered)
-    st.markdown('<div class="center"><div class="controls">', unsafe_allow_html=True)
-    ctrl_cols = st.columns([1, 1, 1])
-    with ctrl_cols[0]:
-        if st.button(
-            "Generate training data", key="gen_data", use_container_width=True
-        ):
-            df = generate_fallback_data(dataset_size)
-            st.session_state["training_data"] = df
-            st.session_state["pred_cache"] = {}
-            st.success(f"Generated {len(df)} samples")
-
-    with ctrl_cols[1]:
-        model_save_name = st.text_input(
-            "Model save name", value=f"{model_choice.replace(' ','_')}_model"
-        )
-        if st.button("Train model", key="train_model", use_container_width=True):
-            if (
-                "training_data" not in st.session_state
-                or st.session_state["training_data"] is None
-            ):
-                st.error("No training data. Generate or upload training data first.")
-            else:
-                df = st.session_state["training_data"]
-                # instantiate (This might return a project model or a sklearn fallback)
-                try:
-                    model_obj = create_model_instance(model_choice)
-                    # Log which type of model object was created
-                    logger.info(
-                        f"Created model instance for training: {type(model_obj)}"
-                    )
-                except Exception as e:
-                    st.error(f"Failed to create model instance: {e}")
-                    model_obj = None
-
-                if model_obj is not None:
-                    with st.spinner("Training model..."):
-                        try:
-                            # --- FIX: Use a standardized sklearn Pipeline approach for ALL models ---
-                            # This avoids issues with project models' internal training methods or sklearn compatibility.
-                            # We extract the *name* of the requested model type to choose the correct sklearn fallback estimator.
-                            X = df.copy()
-                            y = X[TARGET_COLUMN]
-
-                            # Determine the sklearn estimator based on the model_choice string
-                            # This ensures we always train with a known, working sklearn estimator.
-                            if "mlp" in model_choice.lower():
-                                estimator = MLPRegressor(
-                                    hidden_layer_sizes=(
-                                        64,
-                                        64,
-                                    ),  # Use default or pass from UI if needed
-                                    max_iter=400,
-                                    early_stopping=True,
-                                    random_state=DEFAULT_SEED,
-                                )
-                            elif (
-                                "forest" in model_choice.lower()
-                                or "random" in model_choice.lower()
-                            ):
-                                estimator = RandomForestRegressor(
-                                    n_estimators=200,
-                                    n_jobs=-1,
-                                    random_state=DEFAULT_SEED,
-                                )
-                            elif "svr" in model_choice.lower():
-                                estimator = SVR(C=1.0, kernel="rbf")
-                            elif (
-                                "xgboost" in model_choice.lower()
-                                or "xgb" in model_choice.lower()
-                            ):
-                                if XGBOOST_AVAILABLE:
-                                    estimator = XGBRegressor(
-                                        n_estimators=200,
-                                        objective="reg:squarederror",
-                                        random_state=DEFAULT_SEED,
-                                    )
-                                else:
-                                    logger.warning(
-                                        "XGBoost not available, falling back to RandomForest for training."
-                                    )
-                                    estimator = RandomForestRegressor(
-                                        n_estimators=200,
-                                        n_jobs=-1,
-                                        random_state=DEFAULT_SEED,
-                                    )
-                            else:
-                                # Default fallback
-                                estimator = RandomForestRegressor(
-                                    n_estimators=100,
-                                    n_jobs=-1,
-                                    random_state=DEFAULT_SEED,
-                                )
-
-                            # Build and fit the pipeline using the chosen sklearn estimator
-                            pipeline = Pipeline(
-                                [("scaler", StandardScaler()), ("est", estimator)]
-                            )
-                            t0 = time.time()
-                            # Use FEATURE_COLUMNS for the standard pipeline training
-                            pipeline.fit(X[FEATURE_COLUMNS], y)
-                            t1 = time.time()
-
-                            # Calculate metrics
-                            y_pred = pipeline.predict(X[FEATURE_COLUMNS])
-                            metrics = {
-                                "train_rmse": math.sqrt(mean_squared_error(y, y_pred)),
-                                "train_mae": mean_absolute_error(y, y_pred),
-                                "train_r2": r2_score(y, y_pred),
-                                "fit_time_seconds": t1 - t0,
-                            }
-
-                            # Store the trained sklearn pipeline as the model object for saving/prediction
-                            model_obj = pipeline
-                            history = None
-                            logger.info(
-                                f"Training finished using standardized sklearn pipeline for {type(estimator)}"
-                            )
-                            # --- END OF FIX ---
-
-                            # save in session
-                            st.session_state["last_trained"] = {
-                                "name": model_save_name,
-                                "model": model_obj,
-                                "metrics": metrics,
-                                "history": history,
-                            }
-                            st.session_state.setdefault(
-                                "pred_cache", {}
-                            )  # ensure cache exists
-                            st.success("Training finished")
-                            # --- FIX: Use the new API ---
-                            st.rerun()
-                            # --- END OF FIX ---
-                        except Exception as e:
-                            st.error(f"Training failed: {e}")
-                            logger.exception("Training error")
-
-    with ctrl_cols[2]:
-        if st.button(
-            "Save last trained model", key="save_model", use_container_width=True
-        ):
-            if "last_trained" not in st.session_state:
-                st.error("No trained model in this session to save.")
-            else:
-                entry = st.session_state["last_trained"]
-                saved_path = save_model_ui(entry["name"], entry["model"])
-                if saved_path:
-                    st.success(f"Saved model to {saved_path}")
-                else:
-                    st.error("Failed to save model. Check logs.")
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    # If session has training data show HEAD and simple table
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### Training data preview")
-    if (
-        "training_data" in st.session_state
-        and st.session_state["training_data"] is not None
-    ):
-        st.dataframe(st.session_state["training_data"].head(200))
-    else:
-        st.info(
-            "No training data in session. Generate training data or upload your own dataset externally."
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Model registry & load
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### Model registry")
-    registry = load_registry()
-    registry_keys = list(registry.keys())
-    if registry_keys:
-        sel_model = st.selectbox(
-            "Load model from registry", options=["-- none --"] + registry_keys
-        )
-        if sel_model and sel_model != "-- none --":
-            if st.button("Load selected model", key="load_model"):
-                loaded = load_model_ui(sel_model)
-                if loaded is None:
-                    st.error("Failed to load model")
-                else:
-                    st.session_state["last_trained"] = {
-                        "name": sel_model,
-                        "model": loaded,
-                        "metrics": registry[sel_model].get("metrics"),
-                        "history": None,
-                    }
-                    st.success(f"Loaded {sel_model}")
-    else:
-        st.info("No saved models found.")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Prediction & Visualization
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### Volatility surface inference")
-
-    # grid
-    M_grid, T_grid, grid_df = build_prediction_grid(
-        0.7, 1.3, m_steps, 0.05, 2.0, t_steps
-    )
-    # if we have cached pred for this model+grid use it
-    pred_key = f"pred::{model_choice}::{m_steps}x{t_steps}"
-    preds = None
-    if pred_key in st.session_state.get("pred_cache", {}):
-        preds = st.session_state["pred_cache"][pred_key]
-        st.info("Using cached predictions")
-    else:
-        with st.spinner("Computing predictions..."):
-            if (
-                "last_trained" in st.session_state
-                and st.session_state["last_trained"].get("model") is not None
-            ):
-                model_obj = st.session_state["last_trained"]["model"]
-                try:
-                    preds = safe_predict(model_obj, grid_df)
-                except Exception as e:
-                    logger.error("Prediction error: %s", e)
-                    preds = generate_fallback_prediction(grid_df)
-            else:
-                preds = generate_fallback_prediction(grid_df)
-            st.session_state.setdefault("pred_cache", {})[pred_key] = preds
-
-    try:
-        Z_pred = np.asarray(preds).reshape(M_grid.shape)
-    except Exception:
-        Z_pred = np.full(M_grid.shape, 0.2)
-        st.error("Prediction reshape failed")
-
-    fig = fig_surface(M_grid, T_grid, Z_pred, title=f"{model_choice} predicted surface")
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Performance metrics & training diagnostics
-    st.markdown('<div class="section">', unsafe_allow_html=True)
-    st.markdown("### Performance & diagnostics")
-    col_a, col_b = st.columns([2, 1])
-    with col_a:
-        # show metrics of last training
-        if "last_trained" in st.session_state:
-            last = st.session_state["last_trained"]
-            st.markdown("#### Last training summary")
-            st.json(last.get("metrics", {}))
-            # show loss curve if available in history
-            history = last.get("history")
-            if history:
-                train_loss = history.get("train_loss")
-                val_loss = history.get("val_loss")
-                if train_loss and val_loss:
-                    loss_fig = go.Figure()
-                    loss_fig.add_trace(go.Scatter(y=train_loss, name="train"))
-                    loss_fig.add_trace(go.Scatter(y=val_loss, name="val"))
-                    loss_fig.update_layout(
-                        title="Training loss (MSE)", template="plotly_dark", height=350
-                    )
-                    st.plotly_chart(loss_fig, use_container_width=True)
-            # for sklearn pipelines show feature importance if possible
-            model_obj = last.get("model")
-            feat_imp = None
-            try:
-                if isinstance(model_obj, Pipeline):
-                    est = model_obj.named_steps.get("est")
-                    if hasattr(est, "feature_importances_"):
-                        feat_imp = dict(
-                            zip(FEATURE_COLUMNS, est.feature_importances_.tolist())
-                        )
-                elif hasattr(model_obj, "training_history") and isinstance(
-                    model_obj.training_history, dict
-                ):
-                    # some project models put feature_importances in training_history
-                    fi = model_obj.training_history.get("feature_importances")
-                    if fi:
-                        feat_imp = fi
-                elif hasattr(model_obj, "model") and hasattr(
-                    model_obj.model, "feature_importances_"
-                ):
-                    feat_imp = dict(
-                        zip(
-                            FEATURE_COLUMNS,
-                            model_obj.model.feature_importances_.tolist(),
-                        )
-                    )
-            except Exception as e:
-                logger.debug("Feature importance retrieval failed: %s", e)
-
-            if feat_imp:
-                fi_fig = go.Figure(
-                    go.Bar(x=list(feat_imp.keys()), y=list(feat_imp.values()))
-                )
-                fi_fig.update_layout(
-                    title="Feature importances", template="plotly_dark", height=320
-                )
-                st.plotly_chart(fi_fig, use_container_width=True)
+def create_ml_model(model_name: str):
+    """Create ML model pipeline."""
+    if model_name == "Random Forest":
+        model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+    elif model_name == "XGBoost":
+        if XGB_AVAILABLE:
+            model = xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42)
         else:
-            st.info("No training has been performed in this session.")
+            model = GradientBoostingRegressor(n_estimators=100, max_depth=6, random_state=42)
+    elif model_name == "MLP":
+        model = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=500, random_state=42)
+    elif model_name == "SVR":
+        model = SVR(kernel='rbf', C=10, gamma='scale')
+    else:
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+    
+    return Pipeline([
+        ('scaler', StandardScaler()),
+        ('model', model)
+    ])
 
-    with col_b:
-        # show simple predicted surface stats
-        st.markdown("#### Predicted surface stats")
-        st.metric("IV min", f"{np.nanmin(Z_pred):.4f}")
-        st.metric("IV mean", f"{np.nanmean(Z_pred):.4f}")
-        st.metric("IV max", f"{np.nanmax(Z_pred):.4f}")
-        rmse = math.sqrt(
-            np.nanmean(
-                (
-                    Z_pred
-                    - (
-                        0.2
-                        + 0.05 * np.sin(2 * np.pi * M_grid) * np.exp(-T_grid)
-                        + 0.03 * (M_grid - 1) ** 2
-                    )
-                )
-                ** 2
+
+# =============================================================================
+# HEADER
+# =============================================================================
+page_header("Volatility Surface", "ML-based implied volatility modeling and visualization")
+
+# =============================================================================
+# INPUT SECTION
+# =============================================================================
+st.markdown('<div class="input-section">', unsafe_allow_html=True)
+
+col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.8])
+
+with col1:
+    st.markdown("**Surface Parameters**")
+    atm_vol = st.slider("ATM Volatility (%)", min_value=5, max_value=60, value=20, key="vs_atm") / 100
+    skew = st.slider("Skew", min_value=-30, max_value=10, value=-10, key="vs_skew") / 100
+
+with col2:
+    st.markdown("**Surface Shape**")
+    smile = st.slider("Smile Curvature", min_value=0, max_value=20, value=5, key="vs_smile") / 100
+    term_slope = st.slider("Term Slope", min_value=-10, max_value=5, value=-2, key="vs_term") / 100
+
+with col3:
+    st.markdown("**Grid Resolution**")
+    n_strikes = st.select_slider("Strike Points", options=[10, 15, 20, 30, 40], value=20, key="vs_strikes")
+    n_maturities = st.select_slider("Maturity Points", options=[8, 10, 15, 20, 25], value=15, key="vs_mat")
+
+with col4:
+    st.markdown("**ML Model**")
+    model_name = st.selectbox(
+        "Select Model",
+        ["Random Forest", "XGBoost", "MLP", "SVR"],
+        key="vs_model",
+        help="ML model for interpolation/smoothing"
+    )
+    seed = st.number_input("Random Seed", min_value=1, max_value=99999, value=42, key="vs_seed")
+
+with col5:
+    st.markdown("**Actions**")
+    st.write("")
+    generate_btn = st.button("🌊 Generate Data", type="primary", use_container_width=True)
+    train_btn = st.button("🧠 Train & Fit", use_container_width=True)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# =============================================================================
+# SESSION STATE
+# =============================================================================
+if "iv_data" not in st.session_state:
+    st.session_state.iv_data = None
+if "trained_model" not in st.session_state:
+    st.session_state.trained_model = None
+
+# =============================================================================
+# GENERATE DATA
+# =============================================================================
+if generate_btn:
+    t_start = time.perf_counter()
+    
+    moneyness, maturities, iv_grid, M, T = generate_iv_surface_vectorized(
+        n_strikes=n_strikes,
+        n_maturities=n_maturities,
+        atm_vol=atm_vol,
+        skew=skew,
+        term_slope=term_slope,
+        smile_curvature=smile,
+        seed=seed
+    )
+    
+    t_gen = (time.perf_counter() - t_start) * 1000
+    
+    st.session_state.iv_data = {
+        "moneyness": moneyness,
+        "maturities": maturities,
+        "iv_grid": iv_grid,
+        "M": M,
+        "T": T
+    }
+    
+    st.success(f"✅ Generated {n_strikes * n_maturities} data points in {format_time_ms(t_gen)}")
+
+# =============================================================================
+# TRAIN MODEL
+# =============================================================================
+if train_btn:
+    if st.session_state.iv_data is None:
+        st.warning("Please generate data first!")
+    elif not SKLEARN_AVAILABLE:
+        st.error("scikit-learn not available")
+    else:
+        data = st.session_state.iv_data
+        
+        X, y = create_training_data(data["M"], data["T"], data["iv_grid"])
+        
+        t_start = time.perf_counter()
+        
+        model = create_ml_model(model_name)
+        model.fit(X, y)
+        
+        t_train = (time.perf_counter() - t_start) * 1000
+        
+        # Evaluate
+        y_pred = model.predict(X)
+        rmse = np.sqrt(np.mean((y - y_pred) ** 2))
+        r2 = 1 - np.sum((y - y_pred) ** 2) / np.sum((y - np.mean(y)) ** 2)
+        
+        st.session_state.trained_model = {
+            "model": model,
+            "name": model_name,
+            "rmse": rmse,
+            "r2": r2,
+            "train_time": t_train
+        }
+        
+        st.success(f"✅ {model_name} trained in {format_time_ms(t_train)} | R²: {r2:.4f} | RMSE: {rmse:.4f}")
+
+# =============================================================================
+# DISPLAY RESULTS
+# =============================================================================
+if st.session_state.iv_data is not None:
+    data = st.session_state.iv_data
+    iv_grid = data["iv_grid"]
+    moneyness = data["moneyness"]
+    maturities = data["maturities"]
+    M, T = data["M"], data["T"]
+    
+    section_divider()
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Min IV</div>
+            <div class="metric-value">{iv_grid.min()*100:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Max IV</div>
+            <div class="metric-value">{iv_grid.max()*100:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Grid Points</div>
+            <div class="metric-value">{len(moneyness) * len(maturities)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        if st.session_state.trained_model:
+            tm = st.session_state.trained_model
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">{tm['name']} R²</div>
+                <div class="metric-value">{tm['r2']:.4f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-label">Model</div>
+                <div class="metric-value">Not trained</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    section_divider()
+    
+    # Visualizations
+    tab1, tab2, tab3 = st.tabs(["🌊 3D Surface", "🗺️ Heatmap", "📈 Slices"])
+    
+    with tab1:
+        # Use ML predictions if model trained
+        if st.session_state.trained_model:
+            model = st.session_state.trained_model["model"]
+            M_fine, T_fine = np.meshgrid(
+                np.linspace(moneyness.min(), moneyness.max(), 40),
+                np.linspace(maturities.min(), maturities.max(), 40)
             )
+            X_fine = np.column_stack([M_fine.ravel(), T_fine.ravel()])
+            iv_fine = model.predict(X_fine).reshape(M_fine.shape)
+            title = f"IV Surface ({st.session_state.trained_model['name']} Fitted)"
+        else:
+            M_fine, T_fine = M, T
+            iv_fine = iv_grid
+            title = "IV Surface (Raw Data)"
+        
+        fig = go.Figure(data=[go.Surface(
+            x=M_fine,
+            y=T_fine,
+            z=iv_fine * 100,
+            colorscale='Viridis',
+            opacity=0.95,
+            contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="white"))
+        )])
+        
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=18, color='#f8fafc')),
+            scene=dict(
+                xaxis_title='Moneyness (K/S)',
+                yaxis_title='Time to Expiry (years)',
+                zaxis_title='Implied Volatility (%)',
+                bgcolor='rgba(15, 23, 42, 0.9)',
+            ),
+            paper_bgcolor='rgba(30, 41, 59, 0.8)',
+            font=dict(color='#cbd5e1'),
+            height=500,
+            margin=dict(l=0, r=0, t=50, b=0)
         )
-        st.metric("Surface RMSE (synthetic truth)", f"{rmse:.6f}")
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with tab2:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig = go.Figure(data=go.Heatmap(
+                x=moneyness,
+                y=maturities,
+                z=iv_grid * 100,
+                colorscale='Viridis',
+                colorbar=dict(title='IV (%)')
+            ))
+            fig.update_layout(**get_chart_layout("Raw Data", 350))
+            fig.update_xaxes(title_text="Moneyness")
+            fig.update_yaxes(title_text="Time (years)")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            if st.session_state.trained_model:
+                fig = go.Figure(data=go.Heatmap(
+                    x=M_fine[0],
+                    y=T_fine[:, 0],
+                    z=iv_fine * 100,
+                    colorscale='Viridis',
+                    colorbar=dict(title='IV (%)')
+                ))
+                fig.update_layout(**get_chart_layout("ML Fitted", 350))
+                fig.update_xaxes(title_text="Moneyness")
+                fig.update_yaxes(title_text="Time (years)")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Train a model to see fitted surface")
+    
+    with tab3:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig = go.Figure()
+            colors = ['#60a5fa', '#a78bfa', '#34d399', '#f97316', '#ef4444']
+            
+            for idx in [0, len(maturities)//4, len(maturities)//2, 3*len(maturities)//4, -1]:
+                fig.add_trace(go.Scatter(
+                    x=moneyness,
+                    y=iv_grid[idx] * 100,
+                    mode='lines',
+                    line=dict(width=2.5, color=colors[min(idx, len(colors)-1) if idx >= 0 else -1]),
+                    name=f'T = {maturities[idx]:.2f}y'
+                ))
+            
+            fig.update_layout(**get_chart_layout("Volatility Smile", 350))
+            fig.update_xaxes(title_text="Moneyness")
+            fig.update_yaxes(title_text="IV (%)")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            fig = go.Figure()
+            
+            for idx in [0, len(moneyness)//4, len(moneyness)//2, 3*len(moneyness)//4, -1]:
+                fig.add_trace(go.Scatter(
+                    x=maturities,
+                    y=iv_grid[:, idx] * 100,
+                    mode='lines',
+                    line=dict(width=2.5, color=colors[min(idx, len(colors)-1) if idx >= 0 else -1]),
+                    name=f'K/S = {moneyness[idx]:.2f}'
+                ))
+            
+            fig.update_layout(**get_chart_layout("Term Structure", 350))
+            fig.update_xaxes(title_text="Time (years)")
+            fig.update_yaxes(title_text="IV (%)")
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # End of main
-
-
-if __name__ == "__main__":
-    main()
+else:
+    st.info("👆 Click **Generate Data** to create a synthetic IV surface, then **Train & Fit** to model it with ML.")
+    
+    st.markdown("""
+    <div class="metric-card">
+        <h3 style="color: #60a5fa; margin-bottom: 1rem;">Available ML Models</h3>
+        <ul style="color: #cbd5e1; line-height: 2;">
+            <li><strong>Random Forest:</strong> Ensemble of decision trees, robust</li>
+            <li><strong>XGBoost:</strong> Gradient boosting, high accuracy</li>
+            <li><strong>MLP:</strong> Neural network, captures complex patterns</li>
+            <li><strong>SVR:</strong> Support Vector Regression, good for smooth surfaces</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)

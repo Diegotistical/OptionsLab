@@ -1,99 +1,188 @@
+# streamlit_app/app.py
 """
-OptionsLab – Streamlit Frontend
-Entry point that sets global page config, loads shared sidebar, and
-delegates to Streamlit's multi-page app (files in streamlit_app/pages).
+OptionsLab – Premium Streamlit Dashboard.
+
+Main entry point with modern, sleek design.
 """
 
 import sys
 from pathlib import Path
 
-# Make sure 'src' is importable as a package (useful on Streamlit Cloud)
+# Ensure src is importable
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if SRC.exists():
-    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import streamlit as st
-from st_utils import load_readme, show_repo_status
 
-# Set page config with dark theme
+# Page config - must be first Streamlit command
 st.set_page_config(
-    page_title="Options Lab", layout="wide", initial_sidebar_state="expanded"
+    page_title="OptionsLab",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for dark mode and full width
-st.markdown(
-    """
-<style>
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        padding-left: 3rem;
-        padding-right: 3rem;
-        max-width: 100%;
-    }
-    .sidebar .sidebar-content {
-        width: 280px;
-    }
-    .css-1d391kg {
-        padding-top: 0rem;
-    }
-    .stButton>button {
-        width: 100%;
-    }
-    .metric-card {
-        background-color: #1a1a1a;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #ff4b4b;
-    }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+# Import components
+try:
+    from components import apply_custom_css, page_header, section_divider
+except ImportError:
+    from streamlit_app.components import apply_custom_css, page_header, section_divider
 
-# Main content
-st.title("OptionsLab Dashboard")
-st.caption("Pricing • Greeks • Risk • Volatility Surface • Benchmarks")
+# Apply theme
+apply_custom_css()
 
-# Metrics row
-col1, col2, col3, col4 = st.columns(4)
+# =============================================================================
+# MAIN CONTENT
+# =============================================================================
+
+page_header("OptionsLab", "Advanced Options Pricing, Greeks & Risk Analytics")
+
+# Overview metrics
+col1, col2, col3, col4, col5 = st.columns(5)
+
 with col1:
-    st.metric("Models Available", "3", "+1")
+    st.markdown("""
+    <div class="metric-card">
+        <div class="metric-label">Pricing Models</div>
+        <div class="metric-value">4</div>
+        <div class="metric-delta">BS · MC · ML · Binomial</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 with col2:
-    st.metric("Greeks Supported", "5", "Δ, Γ, Θ, ν, ρ")
+    st.markdown("""
+    <div class="metric-card">
+        <div class="metric-label">Greeks</div>
+        <div class="metric-value">5</div>
+        <div class="metric-delta">Δ · Γ · Θ · ν · ρ</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 with col3:
-    st.metric("Risk Metrics", "4", "VaR, ES, Stress, Sens")
+    st.markdown("""
+    <div class="metric-card">
+        <div class="metric-label">Risk Metrics</div>
+        <div class="metric-value">4</div>
+        <div class="metric-delta">VaR · ES · Stress · Sens</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 with col4:
-    st.metric("ML Models", "3", "SVR, MLP, XGB")
+    st.markdown("""
+    <div class="metric-card">
+        <div class="metric-label">Acceleration</div>
+        <div class="metric-value">✓</div>
+        <div class="metric-delta">Numba · GPU</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-st.markdown("---")
+with col5:
+    st.markdown("""
+    <div class="metric-card">
+        <div class="metric-label">ML Models</div>
+        <div class="metric-value">3</div>
+        <div class="metric-delta">LightGBM · XGB · MLP</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-col1, col2 = st.columns([1, 1])
+section_divider()
+
+# Feature cards
+col1, col2, col3 = st.columns(3)
+
 with col1:
-    st.subheader("🚀 What's Inside?")
-    st.markdown(
-        """
-    - **Option Pricing**: Black–Scholes (closed form), CRR **Binomial Tree** (Numba), and **Monte Carlo** (CPU / optional GPU)
-    - **Greeks**: Finite-difference Greeks + model-specific methods
-    - **Risk**: VaR, Expected Shortfall, Sensitivity, Stress Testing
-    - **Volatility Surface**: Feature engineering, ML models (SVR/MLP/XGBoost), interpolation, arbitrage checks
-    - **Benchmarks**: Latency comparisons and micro-profiling
-    """
-    )
+    st.markdown("""
+    <div class="metric-card" style="height: 220px;">
+        <h3 style="color: #60a5fa; margin-bottom: 1rem;">⚡ Monte Carlo Pricing</h3>
+        <p style="color: #cbd5e1; line-height: 1.6;">
+            High-performance Monte Carlo simulation with Numba JIT compilation
+            and optional GPU acceleration via CuPy. Vectorized batch processing
+            for 100x speedup.
+        </p>
+        <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 1rem;">
+            → 100K sims in milliseconds
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 with col2:
-    st.subheader("🔗 Quick Links")
-    st.markdown(
-        """
-    - Navigate pages using the sidebar menu
-    - Configure defaults in `src/common/config.py`
-    - Add models under `src/volatility_surface/models/`
-    - Check `src/pricing_models/` for pricing engines
-    - Review `src/risk/` for risk management tools
-    """
-    )
+    st.markdown("""
+    <div class="metric-card" style="height: 220px;">
+        <h3 style="color: #a78bfa; margin-bottom: 1rem;">🧠 ML Surrogate Models</h3>
+        <p style="color: #cbd5e1; line-height: 1.6;">
+            Train LightGBM surrogate models for instant option pricing.
+            Vectorized Black-Scholes training generates 10K samples in &lt;1 second.
+        </p>
+        <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 1rem;">
+            → Inference in microseconds
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-st.markdown("---")
-st.subheader("📖 README")
-st.markdown(load_readme(max_lines=40))
+with col3:
+    st.markdown("""
+    <div class="metric-card" style="height: 220px;">
+        <h3 style="color: #34d399; margin-bottom: 1rem;">📈 Risk Analytics</h3>
+        <p style="color: #cbd5e1; line-height: 1.6;">
+            Comprehensive risk metrics including Value at Risk, Expected Shortfall,
+            stress testing, and sensitivity analysis with interactive visualizations.
+        </p>
+        <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 1rem;">
+            → VaR, ES, Greeks surfaces
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+section_divider()
+
+# Quick navigation
+st.markdown("""
+<h3 style="color: #f8fafc; margin-bottom: 1rem;">🚀 Quick Start</h3>
+<p style="color: #94a3b8; margin-bottom: 1.5rem;">
+    Select a page from the sidebar menu to begin. Each page provides interactive
+    pricing and analysis tools with full-width visualizations.
+</p>
+""", unsafe_allow_html=True)
+
+# Page links
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    if st.button("📈 Monte Carlo Basic", use_container_width=True):
+        st.switch_page("pages/1_MonteCarlo_Basic.py")
+
+with col2:
+    if st.button("🧠 Monte Carlo ML", use_container_width=True):
+        st.switch_page("pages/2_MonteCarlo_ML.py")
+
+with col3:
+    if st.button("⚡ Monte Carlo Unified", use_container_width=True):
+        st.switch_page("pages/3_MonteCarlo_Unified.py")
+
+with col4:
+    if st.button("🌳 Binomial Tree", use_container_width=True):
+        st.switch_page("pages/4_Binomial_Tree.py")
+
+section_divider()
+
+# System info
+with st.expander("📊 System Information", expanded=False):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Available Modules:**")
+        
+        try:
+            from src.pricing_models import NUMBA_AVAILABLE, GPU_AVAILABLE, LIGHTGBM_AVAILABLE
+            st.write(f"- Numba JIT: {'✅ Available' if NUMBA_AVAILABLE else '❌ Not installed'}")
+            st.write(f"- GPU (CuPy): {'✅ Available' if GPU_AVAILABLE else '❌ Not installed'}")
+            st.write(f"- LightGBM: {'✅ Available' if LIGHTGBM_AVAILABLE else '❌ Using sklearn'}")
+        except ImportError:
+            st.write("Could not check module availability")
+    
+    with col2:
+        st.markdown("**Keyboard Shortcuts:**")
+        st.write("- `r` - Rerun page")
+        st.write("- `c` - Clear cache")
+        st.write("- `m` - Toggle sidebar")
