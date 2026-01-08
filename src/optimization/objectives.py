@@ -14,7 +14,7 @@ Usage:
         X_val=X_val, y_val=y_val,
         search_space=LightGBMSearchSpace(),
     )
-    
+
     manager.optimize(objective, search_space, n_trials=100)
 """
 
@@ -41,7 +41,7 @@ def create_lgbm_objective(
 ) -> Callable[[optuna.Trial, int], float]:
     """
     Create LightGBM objective function for Optuna.
-    
+
     Args:
         model_factory: Callable that takes params and returns a model with fit/predict.
         X_train: Training features.
@@ -52,23 +52,23 @@ def create_lgbm_objective(
         metric: Metric to optimize ("rmse", "mae", "mse").
         n_cv_folds: If > 0, use cross-validation instead of holdout.
         cv_seed: Seed for CV splits (ensures determinism).
-    
+
     Returns:
         Objective function compatible with OptunaStudyManager.
     """
     # Validate inputs
     if n_cv_folds == 0 and (X_val is None or y_val is None):
         raise ValueError("Must provide X_val/y_val or set n_cv_folds > 0")
-    
+
     # Create deterministic CV splitter
     cv_rng = get_cv_split_generator(cv_seed)
-    
+
     def objective(trial: optuna.Trial, trial_seed: int) -> float:
         # Get params from trial (already suggested by manager)
         params = {k: v for k, v in trial.params.items()}
         params["seed"] = trial_seed
         params["random_state"] = trial_seed
-        
+
         if n_cv_folds > 0:
             # Cross-validation with deterministic splits
             kf = KFold(
@@ -77,27 +77,27 @@ def create_lgbm_objective(
                 random_state=cv_seed,
             )
             scores = []
-            
+
             for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train)):
                 X_fold_train = X_train[train_idx]
                 y_fold_train = y_train[train_idx]
                 X_fold_val = X_train[val_idx]
                 y_fold_val = y_train[val_idx]
-                
+
                 # Create and train model
                 model = model_factory(**params)
                 model.fit(X_fold_train, y_fold_train)
-                
+
                 # Predict and score
                 y_pred = model.predict(X_fold_val)
                 score = _compute_metric(y_fold_val, y_pred, metric)
                 scores.append(score)
-                
+
                 # Report for pruning
                 trial.report(np.mean(scores), fold_idx)
                 if trial.should_prune():
                     raise optuna.TrialPruned()
-            
+
             return np.mean(scores)
         else:
             # Holdout validation
@@ -105,7 +105,7 @@ def create_lgbm_objective(
             model.fit(X_train, y_train)
             y_pred = model.predict(X_val)
             return _compute_metric(y_val, y_pred, metric)
-    
+
     return objective
 
 
@@ -121,22 +121,22 @@ def create_sklearn_objective(
 ) -> Callable[[optuna.Trial, int], float]:
     """
     Create sklearn-compatible objective function.
-    
+
     Works with any model class that has fit(X, y) and predict(X) methods.
     """
     if n_cv_folds == 0 and (X_val is None or y_val is None):
         raise ValueError("Must provide X_val/y_val or set n_cv_folds > 0")
-    
+
     def objective(trial: optuna.Trial, trial_seed: int) -> float:
         params = {k: v for k, v in trial.params.items()}
-        
+
         # Add random_state if the model supports it
         params["random_state"] = trial_seed
-        
+
         if n_cv_folds > 0:
             kf = KFold(n_splits=n_cv_folds, shuffle=True, random_state=cv_seed)
             scores = []
-            
+
             for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train)):
                 try:
                     model = model_class(**params)
@@ -144,16 +144,16 @@ def create_sklearn_objective(
                     # Model doesn't accept random_state
                     params.pop("random_state", None)
                     model = model_class(**params)
-                
+
                 model.fit(X_train[train_idx], y_train[train_idx])
                 y_pred = model.predict(X_train[val_idx])
                 score = _compute_metric(y_train[val_idx], y_pred, metric)
                 scores.append(score)
-                
+
                 trial.report(np.mean(scores), fold_idx)
                 if trial.should_prune():
                     raise optuna.TrialPruned()
-            
+
             return np.mean(scores)
         else:
             try:
@@ -161,11 +161,11 @@ def create_sklearn_objective(
             except TypeError:
                 params.pop("random_state", None)
                 model = model_class(**params)
-            
+
             model.fit(X_train, y_train)
             y_pred = model.predict(X_val)
             return _compute_metric(y_val, y_pred, metric)
-    
+
     return objective
 
 
@@ -180,7 +180,7 @@ def create_pytorch_objective(
 ) -> Callable[[optuna.Trial, int], float]:
     """
     Create PyTorch model objective function.
-    
+
     Args:
         model_class: PyTorch nn.Module class.
         train_loader: DataLoader for training.
@@ -189,57 +189,57 @@ def create_pytorch_objective(
         epochs: Maximum epochs.
         early_stopping_patience: Epochs without improvement before stopping.
         metric: Loss metric ("mse", "mae").
-    
+
     Returns:
         Objective function for Optuna.
     """
     import torch
     import torch.nn as nn
-    
+
     def objective(trial: optuna.Trial, trial_seed: int) -> float:
         # Set seeds
         torch.manual_seed(trial_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(trial_seed)
-        
+
         # Get hyperparameters
         params = {k: v for k, v in trial.params.items()}
-        
+
         # Extract training params
         lr = params.pop("learning_rate", 1e-3)
         weight_decay = params.pop("weight_decay", 1e-5)
         batch_size = params.pop("batch_size", 32)
-        
+
         # Create model
         model = model_class(**params).to(device)
-        
+
         # Optimizer
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=lr,
             weight_decay=weight_decay,
         )
-        
+
         # Loss function
         criterion = nn.MSELoss() if metric == "mse" else nn.L1Loss()
-        
+
         # Training loop
         best_val_loss = float("inf")
         patience_counter = 0
-        
+
         for epoch in range(epochs):
             # Train
             model.train()
             for batch_X, batch_y in train_loader:
                 batch_X = batch_X.to(device)
                 batch_y = batch_y.to(device)
-                
+
                 optimizer.zero_grad()
                 output = model(batch_X)
                 loss = criterion(output.squeeze(), batch_y)
                 loss.backward()
                 optimizer.step()
-            
+
             # Validate
             model.eval()
             val_losses = []
@@ -250,14 +250,14 @@ def create_pytorch_objective(
                     output = model(batch_X)
                     val_loss = criterion(output.squeeze(), batch_y)
                     val_losses.append(val_loss.item())
-            
+
             avg_val_loss = np.mean(val_losses)
-            
+
             # Report for pruning
             trial.report(avg_val_loss, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
-            
+
             # Early stopping
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
@@ -266,9 +266,9 @@ def create_pytorch_objective(
                 patience_counter += 1
                 if patience_counter >= early_stopping_patience:
                     break
-        
+
         return best_val_loss
-    
+
     return objective
 
 
@@ -280,7 +280,7 @@ def _compute_metric(
     """Compute evaluation metric."""
     y_true = np.asarray(y_true).flatten()
     y_pred = np.asarray(y_pred).flatten()
-    
+
     if metric == "rmse":
         return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
     elif metric == "mse":

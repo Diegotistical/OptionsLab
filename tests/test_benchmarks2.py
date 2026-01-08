@@ -5,21 +5,23 @@ Benchmark Monte Carlo pricer vs. Black-Scholes and Binomial Tree
 with Delta/Gamma, CPU & GPU comparison.
 """
 
-import time
-import sys
 import os
+import sys
+import time
+
 import numpy as np
 from scipy.stats import norm
 
 # Ensure src is in path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.pricing_models.binomial_tree import BinomialTree
-from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni, MLSurrogate
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+from src.pricing_models.binomial_tree import BinomialTree
+from src.pricing_models.monte_carlo_unified import MLSurrogate, MonteCarloPricerUni
 
 
 # ------------------------------
@@ -96,16 +98,22 @@ print(
 # Benchmark Monte Carlo GPU
 # ------------------------------
 if mc_pricer_gpu.use_gpu:
-    # WARMUP
-    _ = mc_pricer_gpu.price(S, K, T, r, sigma, option_type, q)
-    
-    start = time.perf_counter()
-    mc_price_gpu = mc_pricer_gpu.price(S, K, T, r, sigma, option_type, q)
-    delta_gpu, gamma_gpu = mc_pricer_gpu.delta_gamma(S, K, T, r, sigma, option_type, q)
-    mc_gpu_time = (time.perf_counter() - start) * 1000
-    print(
-        f"Monte Carlo GPU | Price: {mc_price_gpu:.4f} | Delta: {delta_gpu:.4f} | Gamma: {gamma_gpu:.6f} | Time: {mc_gpu_time:.2f} ms"
-    )
+    try:
+        # WARMUP
+        _ = mc_pricer_gpu.price(S, K, T, r, sigma, option_type, q)
+
+        start = time.perf_counter()
+        mc_price_gpu = mc_pricer_gpu.price(S, K, T, r, sigma, option_type, q)
+        delta_gpu, gamma_gpu = mc_pricer_gpu.delta_gamma(
+            S, K, T, r, sigma, option_type, q
+        )
+        mc_gpu_time = (time.perf_counter() - start) * 1000
+        print(
+            f"Monte Carlo GPU | Price: {mc_price_gpu:.4f} | Delta: {delta_gpu:.4f} | Gamma: {gamma_gpu:.6f} | Time: {mc_gpu_time:.2f} ms"
+        )
+    except Exception as e:
+        mc_gpu_time = None
+        print(f"GPU benchmark skipped: {e}")
 else:
     mc_gpu_time = None
     print("GPU not available, skipping GPU benchmark")
@@ -115,30 +123,35 @@ else:
 # ------------------------------
 # FIX: Increased training data from 10 to 50 points to capture Gamma (curvature)
 import pandas as pd
-S_grid = np.linspace(80, 120, 50) 
-df_train = pd.DataFrame({
-    'S': S_grid,
-    'K': np.full(len(S_grid), K),
-    'T': np.full(len(S_grid), T),
-    'r': np.full(len(S_grid), r),
-    'sigma': np.full(len(S_grid), sigma),
-    'q': np.full(len(S_grid), q)
-})
+
+S_grid = np.linspace(80, 120, 50)
+df_train = pd.DataFrame(
+    {
+        "S": S_grid,
+        "K": np.full(len(S_grid), K),
+        "T": np.full(len(S_grid), T),
+        "r": np.full(len(S_grid), r),
+        "sigma": np.full(len(S_grid), sigma),
+        "q": np.full(len(S_grid), q),
+    }
+)
 
 ml_model = MLSurrogate()
 start = time.perf_counter()
 ml_model.fit(df_train, mc_pricer_cpu)
 ml_fit_time = (time.perf_counter() - start) * 1000
 
-df_test = pd.DataFrame([[S, K, T, r, sigma, q]], columns=['S','K','T','r','sigma','q'])
+df_test = pd.DataFrame(
+    [[S, K, T, r, sigma, q]], columns=["S", "K", "T", "r", "sigma", "q"]
+)
 start = time.perf_counter()
 ml_pred = ml_model.predict(df_test)
 ml_predict_time = (time.perf_counter() - start) * 1000
 
 # Extract values from DataFrame
-pred_price = ml_pred['price'].iloc[0]
-pred_delta = ml_pred['delta'].iloc[0]
-pred_gamma = ml_pred['gamma'].iloc[0]
+pred_price = ml_pred["price"].iloc[0]
+pred_delta = ml_pred["delta"].iloc[0]
+pred_gamma = ml_pred["gamma"].iloc[0]
 
 print(
     f"ML Surrogate    | Price: {pred_price:.4f} | Delta: {pred_delta:.4f} | Gamma: {pred_gamma:.6f} | Fit: {ml_fit_time:.2f} ms | Predict: {ml_predict_time:.2f} ms"

@@ -47,5 +47,5 @@ def test_monte_carlo_var_raises_on_bad_inputs():
             initial_price=100,
             mu=0.05,
             sigma=0.1,
-            num_simulations=-100, # invalid
+            num_simulations=-100,  # invalid
         )

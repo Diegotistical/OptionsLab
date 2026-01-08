@@ -35,10 +35,10 @@ def create_monte_carlo_ml_optimizer(
 ) -> Dict[str, Any]:
     """
     Run Optuna optimization for MonteCarloMLSurrogate.
-    
+
     This is a convenience wrapper that handles the full optimization flow
     without requiring the user to understand all Optuna internals.
-    
+
     Args:
         X_train: Training features (n_samples, n_features).
         y_train: Training targets (n_samples, n_outputs).
@@ -49,19 +49,19 @@ def create_monte_carlo_ml_optimizer(
         seed: Random seed for reproducibility.
         save_results: Whether to save results to disk.
         output_dir: Directory for saving results.
-    
+
     Returns:
         Dict with best_params, best_score, study_result, and trained_model.
     """
     from src.optimization import (
-        OptunaStudyManager,
         LightGBMSearchSpace,
+        OptunaStudyManager,
         create_lgbm_objective,
     )
     from src.pricing_models import MonteCarloMLSurrogate
-    
+
     output_dir = output_dir or Path("models/optimization_results")
-    
+
     # Create model factory
     def model_factory(**params) -> MonteCarloMLSurrogate:
         # Filter to only valid MonteCarloMLSurrogate params
@@ -73,33 +73,33 @@ def create_monte_carlo_ml_optimizer(
         }
         model = MonteCarloMLSurrogate(**valid_params)
         return model
-    
+
     # Create a wrapper that fits and returns predictions
     class FittableWrapper:
         def __init__(self, **params):
             self.params = params
             self.model = model_factory(**params)
-        
+
         def fit(self, X, y):
             # Since MonteCarloMLSurrogate generates its own data,
             # we'll use sklearn-style fit for the internal model
-            if hasattr(self.model, 'model') and self.model.model is not None:
+            if hasattr(self.model, "model") and self.model.model is not None:
                 self.model.model.fit(X, y)
                 self.model.trained = True
             return self
-        
+
         def predict(self, X):
-            if hasattr(self.model, 'model') and self.model.model is not None:
+            if hasattr(self.model, "model") and self.model.model is not None:
                 return self.model.model.predict(X)
             return np.zeros(len(X))
-    
+
     # Create study manager
     manager = OptunaStudyManager(
         study_name=study_name,
         storage=f"sqlite:///{output_dir / 'optuna_studies.db'}",
         seed=seed,
     )
-    
+
     # Create search space
     search_space = LightGBMSearchSpace(
         n_estimators_range=(100, 500),
@@ -107,7 +107,7 @@ def create_monte_carlo_ml_optimizer(
         learning_rate_range=(0.01, 0.2),
         num_leaves_range=(15, 63),
     )
-    
+
     # Create objective
     objective = create_lgbm_objective(
         model_factory=lambda **p: FittableWrapper(**p),
@@ -117,7 +117,7 @@ def create_monte_carlo_ml_optimizer(
         y_val=y_val,
         metric="rmse",
     )
-    
+
     # Run optimization
     result = manager.optimize(
         objective=objective,
@@ -125,7 +125,7 @@ def create_monte_carlo_ml_optimizer(
         n_trials=n_trials,
         show_progress_bar=False,
     )
-    
+
     # Train final model with best params
     final_model = MonteCarloMLSurrogate(
         n_estimators=result.best_params.get("n_estimators", 200),
@@ -133,12 +133,12 @@ def create_monte_carlo_ml_optimizer(
         learning_rate=result.best_params.get("learning_rate", 0.1),
         seed=seed,
     )
-    
+
     # Save results
     if save_results:
         output_dir.mkdir(parents=True, exist_ok=True)
         result.save(output_dir / f"{study_name}_result.json")
-    
+
     return {
         "best_params": result.best_params,
         "best_score": result.best_value,
@@ -165,41 +165,39 @@ def create_mlp_optimizer(
 ) -> Dict[str, Any]:
     """
     Run Optuna optimization for MLPModel volatility surface.
-    
+
     Args:
         train_df: Training DataFrame with features and implied_volatility.
         val_df: Validation DataFrame.
         n_trials: Number of Optuna trials.
         study_name: Name for the study.
         seed: Random seed.
-    
+
     Returns:
         Dict with best_params, best_score, and model_factory.
     """
-    from src.optimization import (
-        OptunaStudyManager,
-        MLPSearchSpace,
-    )
     import optuna
-    
+
+    from src.optimization import MLPSearchSpace, OptunaStudyManager
+
     output_dir = Path("models/optimization_results")
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create study manager
     manager = OptunaStudyManager(
         study_name=study_name,
         storage=f"sqlite:///{output_dir / 'optuna_studies.db'}",
         seed=seed,
     )
-    
+
     search_space = MLPSearchSpace()
-    
+
     def objective(trial: optuna.Trial, trial_seed: int) -> float:
         # Import here to avoid circular imports
         from src.volatility_surface.models.mlp_model import MLPModel
-        
+
         params = {k: v for k, v in trial.params.items()}
-        
+
         # Create model with suggested params
         model = MLPModel(
             hidden_layers=params.get("hidden_layers", [64, 32]),
@@ -211,23 +209,23 @@ def create_mlp_optimizer(
             early_stopping_patience=10,
             random_seed=trial_seed,
         )
-        
+
         # Train and get validation loss
         try:
             result = model._train_impl(train_df, val_split=0.2)
             return result["val_loss"]
         except Exception:
             return float("inf")
-    
+
     result = manager.optimize(
         objective=objective,
         search_space=search_space,
         n_trials=n_trials,
         show_progress_bar=False,
     )
-    
+
     result.save(output_dir / f"{study_name}_result.json")
-    
+
     return {
         "best_params": result.best_params,
         "best_score": result.best_value,
@@ -244,22 +242,22 @@ def optimize_and_export_onnx(
 ) -> Dict[str, Any]:
     """
     Export model to ONNX and validate.
-    
+
     Args:
         model: Trained model to export.
         X_test: Test data for validation.
         feature_names: Ordered feature names.
         output_path: Path for ONNX file.
         model_type: "lightgbm" or "pytorch".
-    
+
     Returns:
         Dict with export_result and validation_result.
     """
     from src.optimization import ONNXExporter, ONNXValidator
-    
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Export
     if model_type == "lightgbm":
         export_result = ONNXExporter.export_lightgbm(
@@ -269,6 +267,7 @@ def optimize_and_export_onnx(
         )
     else:
         import torch
+
         dummy_input = torch.randn(1, len(feature_names))
         model.eval()
         export_result = ONNXExporter.export_pytorch(
@@ -277,7 +276,7 @@ def optimize_and_export_onnx(
             output_path=output_path,
             feature_names=feature_names,
         )
-    
+
     # Validate
     if export_result.success:
         validator = ONNXValidator(rtol=1e-3, atol=1e-4)
@@ -288,7 +287,7 @@ def optimize_and_export_onnx(
         )
     else:
         validation_result = None
-    
+
     return {
         "export_result": export_result,
         "validation_result": validation_result,

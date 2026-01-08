@@ -80,6 +80,26 @@ class MLPModel(VolatilityModelBase, nn.Module):
         self.best_state = None
         self.train_history = {"train_loss": [], "val_loss": []}
 
+    def train(self, df_or_mode=True, val_split: float = 0.2):
+        """
+        Overridden to handle dual inheritance from nn.Module and VolatilityModelBase.
+
+        If df_or_mode is a DataFrame, delegates to VolatilityModelBase.train().
+        If df_or_mode is a bool, delegates to nn.Module.train() for train/eval mode.
+        """
+        import pandas as pd
+
+        if isinstance(df_or_mode, pd.DataFrame):
+            # VolatilityModelBase.train(df) behavior
+            return VolatilityModelBase.train(self, df_or_mode, val_split)
+        else:
+            # nn.Module.train(mode) behavior - set training mode
+            return nn.Module.train(self, df_or_mode)
+
+    def eval(self):
+        """Override to call nn.Module.eval() directly, avoiding MRO issues."""
+        return nn.Module.eval(self)
+
     def _create_activation(self):
         act_cls = getattr(nn, self.activation_name, None)
         if act_cls is None:
@@ -171,7 +191,9 @@ class MLPModel(VolatilityModelBase, nn.Module):
             patience_counter = 0
 
             for epoch in range(self.epochs):
-                self.train()
+                nn.Module.train(
+                    self
+                )  # Set to training mode (avoid base class collision)
                 train_loss = 0.0
                 for Xb, yb in train_loader:
                     self.optimizer.zero_grad()
@@ -185,7 +207,7 @@ class MLPModel(VolatilityModelBase, nn.Module):
                     train_loss += loss.item() * Xb.size(0)
                 train_loss /= len(train_loader.dataset)
 
-                self.eval()
+                nn.Module.eval(self)  # Set to eval mode (avoid base class collision)
                 val_loss = 0.0
                 with torch.no_grad():
                     for Xb, yb in val_loader:
@@ -223,7 +245,7 @@ class MLPModel(VolatilityModelBase, nn.Module):
             features = self._prepare_data(df)
 
             if mc_samples == 1:
-                self.eval()
+                self.model.eval()  # Set model to eval mode
                 features.requires_grad_(compute_greeks)
                 with torch.no_grad() if not compute_greeks else torch.enable_grad():
                     preds = self.forward(features)
@@ -235,7 +257,7 @@ class MLPModel(VolatilityModelBase, nn.Module):
                 return preds_np
 
             # MC Dropout inference
-            self.train()
+            nn.Module.train(self)  # Set to train mode
             for m in self.modules():
                 if isinstance(m, nn.BatchNorm1d):
                     m.eval()
@@ -246,7 +268,7 @@ class MLPModel(VolatilityModelBase, nn.Module):
                     preds = self.forward(features)
                     preds_samples.append(preds.cpu().numpy().flatten())
 
-            self.eval()
+            nn.Module.eval(self)  # Set to eval mode
             mean_preds = np.mean(preds_samples, axis=0)
             self._on_predict_end(mean_preds)
             return mean_preds

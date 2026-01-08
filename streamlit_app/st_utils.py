@@ -36,6 +36,7 @@ logger = logging.getLogger("st_utils")
 # Path Setup for Cross-Platform Compatibility
 # =============================================================================
 
+
 def _setup_paths() -> Path:
     """
     Set up Python path for both local and Streamlit Cloud environments.
@@ -56,13 +57,13 @@ def _setup_paths() -> Path:
                 break
         else:
             root = Path.cwd()
-    
+
     # Add root to path if not present
     root_str = str(root)
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
         logger.info(f"Added {root_str} to sys.path")
-    
+
     return root
 
 
@@ -77,6 +78,7 @@ PROJECT_ROOT = _setup_paths()
 # Try imports from src package
 try:
     from src.pricing_models.black_scholes import black_scholes as bs_price
+
     logger.info("Imported black_scholes from src.pricing_models")
 except ImportError as e:
     logger.warning(f"Failed to import black_scholes: {e}")
@@ -84,6 +86,7 @@ except ImportError as e:
 
 try:
     from src.pricing_models.binomial_tree import BinomialTree
+
     logger.info("Imported BinomialTree from src.pricing_models")
 except ImportError as e:
     logger.warning(f"Failed to import BinomialTree: {e}")
@@ -91,6 +94,7 @@ except ImportError as e:
 
 try:
     from src.pricing_models.monte_carlo import MonteCarloPricer
+
     logger.info("Imported MonteCarloPricer from src.pricing_models")
 except ImportError as e:
     logger.warning(f"Failed to import MonteCarloPricer: {e}")
@@ -98,6 +102,7 @@ except ImportError as e:
 
 try:
     from src.pricing_models.monte_carlo_ml import MonteCarloMLSurrogate as MonteCarloML
+
     logger.info("Imported MonteCarloMLSurrogate from src.pricing_models")
 except ImportError as e:
     logger.warning(f"Failed to import MonteCarloMLSurrogate: {e}")
@@ -105,6 +110,7 @@ except ImportError as e:
 
 try:
     from src.pricing_models.monte_carlo_unified import MonteCarloPricerUni
+
     logger.info("Imported MonteCarloPricerUni from src.pricing_models")
 except ImportError as e:
     logger.warning(f"Failed to import MonteCarloPricerUni: {e}")
@@ -112,6 +118,7 @@ except ImportError as e:
 
 try:
     from src.risk_analysis.var import VaRAnalyzer
+
     logger.info("Imported VaRAnalyzer from src.risk_analysis")
 except ImportError as e:
     logger.warning(f"Failed to import VaRAnalyzer: {e}")
@@ -119,6 +126,7 @@ except ImportError as e:
 
 try:
     from src.risk_analysis.expected_shortfall import ExpectedShortfall
+
     expected_shortfall = ExpectedShortfall
     logger.info("Imported ExpectedShortfall from src.risk_analysis")
 except ImportError as e:
@@ -127,6 +135,7 @@ except ImportError as e:
 
 try:
     from src.volatility_surface.surface_generator import VolatilitySurfaceGenerator
+
     logger.info("Imported VolatilitySurfaceGenerator")
 except ImportError as e:
     logger.warning(f"Failed to import VolatilitySurfaceGenerator: {e}")
@@ -136,6 +145,7 @@ except ImportError as e:
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
 
 def _ensure_scalar(value: Union[float, np.ndarray, List, pd.Series]) -> float:
     """
@@ -174,6 +184,7 @@ def _extract_scalar(value: Any) -> float:
 # =============================================================================
 # Fallback Monte Carlo Implementation
 # =============================================================================
+
 
 def _simulate_payoffs_fallback(
     S: float,
@@ -214,33 +225,31 @@ def _simulate_payoffs_fallback(
     r = _extract_scalar(r)
     sigma = _extract_scalar(sigma)
     q = _extract_scalar(q)
-    
+
     np.random.seed(int(seed) if seed is not None else None)
     dt = T / num_steps
-    
+
     # Generate random normals
     Z = np.random.standard_normal((num_sim, num_steps))
-    
+
     # Initialize and simulate paths
     S_paths = np.zeros((num_sim, num_steps))
     S_paths[:, 0] = S
-    
+
     drift = (r - q - 0.5 * sigma**2) * dt
     diffusion_factor = sigma * np.sqrt(dt)
-    
+
     for t in range(1, num_steps):
-        S_paths[:, t] = S_paths[:, t - 1] * np.exp(
-            drift + diffusion_factor * Z[:, t]
-        )
-    
+        S_paths[:, t] = S_paths[:, t - 1] * np.exp(drift + diffusion_factor * Z[:, t])
+
     # Calculate payoffs
     if option_type == "call":
         payoff = np.maximum(S_paths[:, -1] - K, 0.0)
     else:
         payoff = np.maximum(K - S_paths[:, -1], 0.0)
-    
+
     discounted = np.exp(-r * T) * payoff
-    
+
     return discounted, S_paths
 
 
@@ -251,6 +260,7 @@ simulate_payoffs = _simulate_payoffs_fallback
 # =============================================================================
 # Cached Pricer Instances
 # =============================================================================
+
 
 @st.cache_resource(show_spinner=False)
 def get_binomial_tree(n_steps: int = 500) -> Optional[Any]:
@@ -379,6 +389,7 @@ def get_mc_unified_pricer(
 # Pricing Wrapper Functions
 # =============================================================================
 
+
 def price_black_scholes(
     S: float,
     K: float,
@@ -493,7 +504,7 @@ def price_monte_carlo(
     r = _extract_scalar(r)
     sigma = _extract_scalar(sigma)
     q = _extract_scalar(q)
-    
+
     # Try optimized pricer
     mc = get_mc_pricer(num_sim, num_steps, seed, use_numba)
     if mc is not None:
@@ -503,7 +514,7 @@ def price_monte_carlo(
                 return float(result)
         except Exception as e:
             logger.warning(f"MC pricer failed: {e}, using fallback")
-    
+
     # Fallback
     try:
         discounted, _ = _simulate_payoffs_fallback(
@@ -556,18 +567,16 @@ def greeks_mc_delta_gamma(
     r = _extract_scalar(r)
     sigma = _extract_scalar(sigma)
     q = _extract_scalar(q)
-    
+
     # Try optimized pricer
     mc = get_mc_pricer(num_sim, num_steps, seed, use_numba)
     if mc is not None:
         try:
-            delta, gamma = mc.delta_gamma(
-                S, K, T, r, sigma, option_type, q, h, seed
-            )
+            delta, gamma = mc.delta_gamma(S, K, T, r, sigma, option_type, q, h, seed)
             return float(delta), float(gamma)
         except Exception as e:
             logger.warning(f"MC Greeks failed: {e}, using fallback")
-    
+
     # Fallback using finite differences
     try:
         p_down = price_monte_carlo(
@@ -579,9 +588,9 @@ def greeks_mc_delta_gamma(
         p_up = price_monte_carlo(
             S + h, K, T, r, sigma, option_type, q, num_sim, num_steps, seed
         )
-        
+
         delta = (p_up - p_down) / (2 * h)
-        gamma = (p_up - 2 * p_mid + p_down) / (h ** 2)
+        gamma = (p_up - 2 * p_mid + p_down) / (h**2)
         return float(delta), float(gamma)
     except Exception as e:
         logger.error(f"Greeks fallback failed: {e}")
@@ -591,6 +600,7 @@ def greeks_mc_delta_gamma(
 # =============================================================================
 # Risk Analysis Wrappers
 # =============================================================================
+
 
 def compute_var_es(
     returns: pd.Series,
@@ -607,19 +617,19 @@ def compute_var_es(
         Tuple of (VaR, ES) or None values if unavailable.
     """
     var_v, es_v = None, None
-    
+
     if VaRAnalyzer:
         try:
             var_v = float(VaRAnalyzer(returns, level=level))
         except Exception as e:
             logger.error(f"VaR failed: {e}")
-    
+
     if expected_shortfall:
         try:
             es_v = float(expected_shortfall(returns, level=level))
         except Exception as e:
             logger.error(f"ES failed: {e}")
-    
+
     return var_v, es_v
 
 
@@ -627,9 +637,11 @@ def compute_var_es(
 # Vol Surface Helpers
 # =============================================================================
 
+
 @dataclass
 class SurfaceResult:
     """Result container for volatility surface generation."""
+
     strikes: np.ndarray
     maturities: np.ndarray
     iv_grid: np.ndarray
@@ -664,7 +676,7 @@ def build_surface(
     if VolatilitySurfaceGenerator is None:
         logger.warning("VolatilitySurfaceGenerator not available")
         return None
-    
+
     try:
         gen = VolatilitySurfaceGenerator(
             strikes=strikes,
@@ -687,6 +699,7 @@ def build_surface(
 # README Loading
 # =============================================================================
 
+
 @st.cache_data(show_spinner=False)
 def load_readme(max_lines: int = 80) -> str:
     """
@@ -703,7 +716,7 @@ def load_readme(max_lines: int = 80) -> str:
         Path("/mount/src/optionslab/README.md"),
         Path.cwd() / "README.md",
     ]
-    
+
     for path in possible_paths:
         try:
             if path.exists():
@@ -711,13 +724,14 @@ def load_readme(max_lines: int = 80) -> str:
                 return "".join(lines)
         except Exception:
             continue
-    
+
     return "_README.md not found_"
 
 
 # =============================================================================
 # Sidebar Status Display
 # =============================================================================
+
 
 def show_repo_status() -> None:
     """Display module availability status in sidebar."""
@@ -730,7 +744,7 @@ def show_repo_status() -> None:
         ("VaR/ES", "✅" if VaRAnalyzer and expected_shortfall else "⚠️"),
         ("Vol Surface", "✅" if VolatilitySurfaceGenerator else "⚠️"),
     ]
-    
+
     for name, status in items:
         st.write(f"{status} {name}")
 
@@ -738,6 +752,7 @@ def show_repo_status() -> None:
 # =============================================================================
 # Timing Utility
 # =============================================================================
+
 
 def timeit_ms(fn, *args, **kwargs) -> Tuple[Any, float]:
     """

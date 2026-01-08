@@ -33,6 +33,7 @@ def _check_torch() -> bool:
     if _torch_available is None:
         try:
             import torch
+
             _torch_available = True
         except ImportError:
             _torch_available = False
@@ -44,6 +45,7 @@ def _check_lightgbm() -> bool:
     if _lgb_available is None:
         try:
             import lightgbm
+
             _lgb_available = True
         except ImportError:
             _lgb_available = False
@@ -53,7 +55,7 @@ def _check_lightgbm() -> bool:
 @dataclass
 class ReproducibilityConfig:
     """Configuration for reproducibility settings."""
-    
+
     seed: int = 42
     n_jobs: int = 1
     omp_threads: int = 4
@@ -61,11 +63,11 @@ class ReproducibilityConfig:
     torch_deterministic: bool = True
     cudnn_deterministic: bool = True
     cudnn_benchmark: bool = False
-    
+
     # LightGBM specific
     lgb_deterministic: bool = True
     lgb_force_col_wise: bool = True
-    
+
     def apply(self) -> None:
         """Apply all reproducibility settings."""
         set_global_seed(self.seed)
@@ -85,33 +87,34 @@ class ReproducibilityConfig:
 def set_global_seed(seed: int) -> None:
     """
     Set global random seed across all relevant libraries.
-    
+
     Affects:
         - Python's random module
         - NumPy's random generator
         - PyTorch (CPU and CUDA if available)
         - LightGBM (via environment variable)
-    
+
     Args:
         seed: Integer seed value for reproducibility.
     """
     # Python stdlib
     random.seed(seed)
-    
+
     # NumPy
     np.random.seed(seed)
-    
+
     # PyTorch
     if _check_torch():
         import torch
+
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)  # Multi-GPU
-    
+
     # LightGBM seed is set per-model, but we set env for safety
     os.environ["LIGHTGBM_SEED"] = str(seed)
-    
+
     # For hash-based operations
     os.environ["PYTHONHASHSEED"] = str(seed)
 
@@ -119,21 +122,21 @@ def set_global_seed(seed: int) -> None:
 def get_trial_seed(study_seed: int, trial_number: int) -> int:
     """
     Generate deterministic seed for a specific trial.
-    
+
     Ensures trial N always gets the same seed regardless of execution order.
     Uses cryptographic hashing for uniform distribution.
-    
+
     Args:
         study_seed: Base seed for the study.
         trial_number: Trial index (0-based).
-    
+
     Returns:
         Deterministic seed for this trial.
     """
     # Use SHA256 for uniform distribution
     hash_input = f"{study_seed}:{trial_number}".encode()
     hash_digest = hashlib.sha256(hash_input).hexdigest()
-    
+
     # Take first 8 hex chars (32 bits) for seed
     return int(hash_digest[:8], 16)
 
@@ -146,10 +149,10 @@ def set_thread_limits(
 ) -> None:
     """
     Set thread limits to prevent resource contention.
-    
+
     Critical for parallel Optuna trials - without this, threads will
     oversubscribe and performance collapses.
-    
+
     Args:
         n_jobs: Number of parallel jobs (for joblib/sklearn).
         omp_threads: OpenMP thread count (affects NumPy, LightGBM).
@@ -158,22 +161,23 @@ def set_thread_limits(
     """
     omp_threads = omp_threads or n_jobs
     mkl_threads = mkl_threads or n_jobs
-    
+
     # OpenMP (affects NumPy BLAS, LightGBM, XGBoost)
     os.environ["OMP_NUM_THREADS"] = str(omp_threads)
-    
+
     # Intel MKL (NumPy on Intel CPUs)
     os.environ["MKL_NUM_THREADS"] = str(mkl_threads)
-    
+
     # OpenBLAS
     os.environ["OPENBLAS_NUM_THREADS"] = str(omp_threads)
-    
+
     # Numexpr
     os.environ["NUMEXPR_NUM_THREADS"] = str(omp_threads)
-    
+
     # PyTorch
     if _check_torch() and torch_threads is not None:
         import torch
+
         torch.set_num_threads(torch_threads)
         torch.set_num_interop_threads(max(1, torch_threads // 2))
 
@@ -185,12 +189,12 @@ def set_torch_determinism(
 ) -> None:
     """
     Configure PyTorch for deterministic operations.
-    
+
     Warning:
         Enabling strict determinism has performance implications:
         - Some operations become slower
         - Some operations may error if no deterministic implementation exists
-    
+
     Args:
         strict: If True, use torch.use_deterministic_algorithms(True).
         cudnn_deterministic: If True, set cudnn.deterministic = True.
@@ -198,13 +202,13 @@ def set_torch_determinism(
     """
     if not _check_torch():
         return
-    
+
     import torch
-    
+
     if strict:
         # This will error on non-deterministic ops
         torch.use_deterministic_algorithms(True, warn_only=False)
-    
+
     if torch.cuda.is_available():
         torch.backends.cudnn.deterministic = cudnn_deterministic
         torch.backends.cudnn.benchmark = cudnn_benchmark
@@ -213,10 +217,10 @@ def set_torch_determinism(
 def get_lightgbm_deterministic_params(seed: int) -> dict:
     """
     Get LightGBM parameters for deterministic training.
-    
+
     Args:
         seed: Random seed.
-    
+
     Returns:
         Dict of parameters to pass to LightGBM.
     """
@@ -235,12 +239,12 @@ def get_lightgbm_deterministic_params(seed: int) -> dict:
 def get_cv_split_generator(seed: int):
     """
     Get a seeded CV split generator.
-    
+
     Use this to ensure CV splits are deterministic across runs.
-    
+
     Args:
         seed: Random seed for splits.
-    
+
     Returns:
         Numpy RandomGenerator for CV splits.
     """
@@ -250,11 +254,11 @@ def get_cv_split_generator(seed: int):
 def compute_data_hash(data: np.ndarray, truncate: int = 8) -> str:
     """
     Compute a hash of data for tracking/versioning.
-    
+
     Args:
         data: NumPy array to hash.
         truncate: Number of hex characters to return.
-    
+
     Returns:
         Truncated SHA256 hash of data.
     """

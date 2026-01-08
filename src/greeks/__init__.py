@@ -1,3 +1,3 @@
-from src.greeks.greeks import compute_greeks, OptionType, ExerciseStyle
+from src.greeks.greeks import ExerciseStyle, OptionType, compute_greeks
 
 __all__ = ["compute_greeks", "OptionType", "ExerciseStyle"]

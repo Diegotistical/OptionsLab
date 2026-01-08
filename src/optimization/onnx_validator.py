@@ -31,37 +31,37 @@ import numpy as np
 @dataclass
 class ValidationResult:
     """Result of ONNX model validation."""
-    
+
     passed: bool
-    
+
     # Error metrics
     mean_abs_diff: float
     max_abs_diff: float
     percentile_95_diff: float
     percentile_99_diff: float
-    
+
     # Correlation metrics
     pearson_correlation: float
     spearman_rank_correlation: float
-    
+
     # Sign agreement (for directional outputs like Greeks)
     sign_agreement_ratio: float
-    
+
     # Distribution metrics
     native_mean: float
     native_std: float
     onnx_mean: float
     onnx_std: float
-    
+
     # Thresholds used
     rtol: float
     atol: float
     max_diff_percentile: float
-    
+
     # Diagnostics
     n_samples: int
     diagnostics: Dict[str, Any] = field(default_factory=dict)
-    
+
     def summary(self) -> str:
         """Get human-readable summary."""
         status = "✓ PASSED" if self.passed else "✗ FAILED"
@@ -85,22 +85,23 @@ ONNX:   μ={self.onnx_mean:.4f}, σ={self.onnx_std:.4f}
 
 class ONNXValidationError(Exception):
     """Raised when ONNX validation fails critically."""
+
     pass
 
 
 class ONNXValidator:
     """
     Distributional validation for ONNX models.
-    
+
     Unlike naive pointwise equality (which fails on float32 vs float64),
     this validates statistical properties that matter in production:
-    
+
     - Mean/max/percentile absolute differences
     - Correlation (Pearson for values, Spearman for ranks)
     - Sign agreement (critical for Greeks/sensitivities)
     - Distribution similarity
     """
-    
+
     def __init__(
         self,
         rtol: float = 1e-3,
@@ -112,7 +113,7 @@ class ONNXValidator:
     ):
         """
         Initialize validator.
-        
+
         Args:
             rtol: Relative tolerance for mean comparison.
             atol: Absolute tolerance for mean comparison.
@@ -127,7 +128,7 @@ class ONNXValidator:
         self.max_diff_threshold = max_diff_threshold
         self.min_correlation = min_correlation
         self.min_sign_agreement = min_sign_agreement
-    
+
     def validate(
         self,
         native_model: Any,
@@ -138,46 +139,46 @@ class ONNXValidator:
     ) -> ValidationResult:
         """
         Validate ONNX model against native model.
-        
+
         Args:
             native_model: Original model with predict() method.
             onnx_path: Path to ONNX model file.
             X_test: Test data for validation.
             n_samples: Max samples to use (default: all).
             providers: ONNX Runtime execution providers.
-        
+
         Returns:
             ValidationResult with detailed metrics.
         """
         import onnxruntime as ort
-        
+
         onnx_path = Path(onnx_path)
-        
+
         # Sample data if needed
         if n_samples and n_samples < len(X_test):
             indices = np.random.choice(len(X_test), n_samples, replace=False)
             X_test = X_test[indices]
-        
+
         # Ensure float32 for ONNX
         X_test_f32 = X_test.astype(np.float32)
-        
+
         # Get native predictions
         native_preds = self._get_native_predictions(native_model, X_test)
         native_preds = np.asarray(native_preds).flatten()
-        
+
         # Get ONNX predictions
         providers = providers or ["CPUExecutionProvider"]
         session = ort.InferenceSession(str(onnx_path), providers=providers)
-        
+
         input_name = session.get_inputs()[0].name
         onnx_preds = session.run(None, {input_name: X_test_f32})[0]
         onnx_preds = np.asarray(onnx_preds).flatten()
-        
+
         # Compute metrics
         result = self._compute_metrics(native_preds, onnx_preds)
-        
+
         return result
-    
+
     def validate_batch_sizes(
         self,
         onnx_path: Union[str, Path],
@@ -187,25 +188,25 @@ class ONNXValidator:
     ) -> Dict[int, bool]:
         """
         Validate ONNX model works with various batch sizes.
-        
+
         Args:
             onnx_path: Path to ONNX model.
             n_features: Number of input features.
             batch_sizes: List of batch sizes to test.
             providers: ONNX Runtime execution providers.
-        
+
         Returns:
             Dict mapping batch_size -> success.
         """
         import onnxruntime as ort
-        
+
         onnx_path = Path(onnx_path)
         batch_sizes = batch_sizes or [1, 16, 32, 64, 128, 256, 512, 1024]
-        
+
         providers = providers or ["CPUExecutionProvider"]
         session = ort.InferenceSession(str(onnx_path), providers=providers)
         input_name = session.get_inputs()[0].name
-        
+
         results = {}
         for batch_size in batch_sizes:
             try:
@@ -214,9 +215,9 @@ class ONNXValidator:
                 results[batch_size] = output.shape[0] == batch_size
             except Exception as e:
                 results[batch_size] = False
-        
+
         return results
-    
+
     def _get_native_predictions(self, model: Any, X: np.ndarray) -> np.ndarray:
         """Get predictions from native model."""
         if hasattr(model, "predict"):
@@ -228,7 +229,7 @@ class ONNXValidator:
                 f"Model must have predict() method or be callable. "
                 f"Got: {type(model)}"
             )
-    
+
     def _compute_metrics(
         self,
         native_preds: np.ndarray,
@@ -236,18 +237,18 @@ class ONNXValidator:
     ) -> ValidationResult:
         """Compute validation metrics."""
         from scipy import stats
-        
+
         # Absolute differences
         abs_diff = np.abs(native_preds - onnx_preds)
         mean_abs_diff = float(np.mean(abs_diff))
         max_abs_diff = float(np.max(abs_diff))
         p95_diff = float(np.percentile(abs_diff, 95))
         p99_diff = float(np.percentile(abs_diff, self.max_diff_percentile))
-        
+
         # Correlation
         pearson_corr = float(np.corrcoef(native_preds, onnx_preds)[0, 1])
         spearman_corr = float(stats.spearmanr(native_preds, onnx_preds).statistic)
-        
+
         # Sign agreement (important for Greeks)
         native_signs = np.sign(native_preds)
         onnx_signs = np.sign(onnx_preds)
@@ -255,22 +256,24 @@ class ONNXValidator:
         near_zero = (np.abs(native_preds) < 1e-6) & (np.abs(onnx_preds) < 1e-6)
         sign_match = (native_signs == onnx_signs) | near_zero
         sign_agreement = float(np.mean(sign_match))
-        
+
         # Distribution stats
         native_mean = float(np.mean(native_preds))
         native_std = float(np.std(native_preds))
         onnx_mean = float(np.mean(onnx_preds))
         onnx_std = float(np.std(onnx_preds))
-        
+
         # Determine pass/fail
-        threshold = self.max_diff_threshold or (self.atol + self.rtol * np.abs(native_mean))
-        
-        passed = (
-            p99_diff <= threshold * 10 and  # Allow 10x threshold for 99th percentile
-            pearson_corr >= self.min_correlation and
-            sign_agreement >= self.min_sign_agreement
+        threshold = self.max_diff_threshold or (
+            self.atol + self.rtol * np.abs(native_mean)
         )
-        
+
+        passed = (
+            p99_diff <= threshold * 10  # Allow 10x threshold for 99th percentile
+            and pearson_corr >= self.min_correlation
+            and sign_agreement >= self.min_sign_agreement
+        )
+
         # Diagnostics for failures
         diagnostics = {}
         if not passed:
@@ -289,7 +292,7 @@ class ONNXValidator:
                     "value": sign_agreement,
                     "threshold": self.min_sign_agreement,
                 }
-            
+
             # Find worst samples
             worst_idx = np.argsort(abs_diff)[-5:]
             diagnostics["worst_samples"] = [
@@ -301,7 +304,7 @@ class ONNXValidator:
                 }
                 for idx in worst_idx
             ]
-        
+
         return ValidationResult(
             passed=passed,
             mean_abs_diff=mean_abs_diff,

@@ -20,12 +20,14 @@ __all__ = ["compute_greeks", "OptionType", "ExerciseStyle"]
 
 class OptionType(IntEnum):
     """Option type: CALL or PUT."""
+
     CALL = 0
     PUT = 1
 
 
 class ExerciseStyle(IntEnum):
     """Option exercise style: EUROPEAN or AMERICAN."""
+
     EUROPEAN = 0
     AMERICAN = 1
 
@@ -52,10 +54,7 @@ def compute_greeks(
         # 1. Get analytical Price, Delta, Gamma in O(1) call
         # The new BinomialTree calculates these simultaneously.
         base_metrics = model.calculate_all(
-            S, K, T, r, sigma, 
-            option_type.name.lower(), 
-            exercise_style.name.lower(), 
-            q
+            S, K, T, r, sigma, option_type.name.lower(), exercise_style.name.lower(), q
         )
 
         greeks = OD()
@@ -67,15 +66,19 @@ def compute_greeks(
         # We only strictly need this for Vega, Theta, Rho, etc.
         def get_price(S_, K_, T_, r_, sigma_, q_):
             return model.price(
-                S_, K_, T_, r_, sigma_,
+                S_,
+                K_,
+                T_,
+                r_,
+                sigma_,
                 option_type.name.lower(),
                 exercise_style.name.lower(),
-                q_
+                q_,
             )
 
         # 3. Calculate other Greeks via Finite Difference
         # Since model.price() is now fast (O(N) + JIT), these are cheap.
-        
+
         # Vega (dPrice/dSigma)
         p_vega_up = get_price(S, K, T, r, sigma + h, q)
         p_vega_down = get_price(S, K, T, r, sigma - h, q)
@@ -98,23 +101,38 @@ def compute_greeks(
         # Vanna (dDelta/dSigma)
         # We can use finite difference on the analytical Deltas for better precision
         delta_sigma_up = model.delta(
-            S, K, T, r, sigma + h, 
-            option_type.name.lower(), 
-            exercise_style.name.lower(), q
+            S,
+            K,
+            T,
+            r,
+            sigma + h,
+            option_type.name.lower(),
+            exercise_style.name.lower(),
+            q,
         )
         delta_sigma_down = model.delta(
-            S, K, T, r, sigma - h, 
-            option_type.name.lower(), 
-            exercise_style.name.lower(), q
+            S,
+            K,
+            T,
+            r,
+            sigma - h,
+            option_type.name.lower(),
+            exercise_style.name.lower(),
+            q,
         )
         greeks["vanna"] = (delta_sigma_up - delta_sigma_down) / (2 * h)
 
         # Charm (dDelta/dTime)
         if T > dt:
             delta_time_minus = model.delta(
-                S, K, T - dt, r, sigma, 
-                option_type.name.lower(), 
-                exercise_style.name.lower(), q
+                S,
+                K,
+                T - dt,
+                r,
+                sigma,
+                option_type.name.lower(),
+                exercise_style.name.lower(),
+                q,
             )
             greeks["charm"] = (delta_time_minus - greeks["delta"]) / dt
         else:
