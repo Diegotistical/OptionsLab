@@ -3,8 +3,8 @@ from src.volatility_surface.utils.arbitrage import (
     simulate_delta_hedge,
 )
 from src.volatility_surface.utils.arbitrage_enforcement import (
-    detect_arbitrage_violations,
     correct_arbitrage,
+    detect_arbitrage_violations,
 )
 from src.volatility_surface.utils.arbitrage_utils import (
     check_butterfly_arbitrage,

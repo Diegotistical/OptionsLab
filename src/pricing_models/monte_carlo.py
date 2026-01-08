@@ -31,16 +31,20 @@ try:
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
+
     # Create dummy decorators for when Numba is not available
     def njit(*args, **kwargs):
         """Dummy njit decorator when Numba is not installed."""
+
         def decorator(func):
             return func
+
         return decorator if not args else decorator(args[0])
-    
+
     def prange(*args, **kwargs):
         """Dummy prange that falls back to range."""
         return range(*args)
+
 
 from src.exceptions.montecarlo_exceptions import InputValidationError, MonteCarloError
 
@@ -52,6 +56,7 @@ __all__ = ["MonteCarloPricer", "NUMBA_AVAILABLE"]
 # =============================================================================
 
 if NUMBA_AVAILABLE:
+
     @njit(cache=True, fastmath=True)
     def _simulate_terminal_prices_numba_single(
         S: float,
@@ -86,22 +91,22 @@ if NUMBA_AVAILABLE:
         dt = T / num_steps
         drift = (r - q - 0.5 * sigma * sigma) * dt
         vol = sigma * np.sqrt(dt)
-        
+
         # Pre-allocate output array
         terminal = np.empty(num_simulations * 2, dtype=np.float64)
-        
+
         for i in range(num_simulations):
             log_S_pos = np.log(S)
             log_S_neg = np.log(S)
-            
+
             for t in range(num_steps):
                 z = np.random.randn()
                 log_S_pos += drift + vol * z
                 log_S_neg += drift - vol * z  # Antithetic variate
-            
+
             terminal[i] = np.exp(log_S_pos)
             terminal[i + num_simulations] = np.exp(log_S_neg)
-        
+
         return terminal
 
     @njit(parallel=True, cache=True, fastmath=True)
@@ -137,23 +142,23 @@ if NUMBA_AVAILABLE:
         dt = T / num_steps
         drift = (r - q - 0.5 * sigma * sigma) * dt
         vol = sigma * np.sqrt(dt)
-        
+
         terminal = np.empty(num_simulations * 2, dtype=np.float64)
-        
+
         for i in prange(num_simulations):
             # Unique seed per simulation for parallel safety
             np.random.seed(seed + i)
             log_S_pos = np.log(S)
             log_S_neg = np.log(S)
-            
+
             for t in range(num_steps):
                 z = np.random.randn()
                 log_S_pos += drift + vol * z
                 log_S_neg += drift - vol * z
-            
+
             terminal[i] = np.exp(log_S_pos)
             terminal[i + num_simulations] = np.exp(log_S_neg)
-        
+
         return terminal
 
 
@@ -206,20 +211,20 @@ class MonteCarloPricer:
             raise InputValidationError(
                 "num_simulations and num_steps must be positive integers"
             )
-        
+
         if use_numba and not NUMBA_AVAILABLE:
             raise MonteCarloError(
                 "Numba is not installed. Install with: pip install numba"
             )
-        
+
         if use_parallel and not use_numba:
-            raise MonteCarloError(
-                "Parallel execution requires use_numba=True"
-            )
+            raise MonteCarloError("Parallel execution requires use_numba=True")
 
         self.num_simulations = num_simulations
         self.num_steps = num_steps
-        self.seed = seed if seed is not None else np.random.default_rng().integers(0, 2**31)
+        self.seed = (
+            seed if seed is not None else np.random.default_rng().integers(0, 2**31)
+        )
         self.use_numba = use_numba and NUMBA_AVAILABLE
         self.use_parallel = use_parallel and self.use_numba
         self.rng = np.random.default_rng(seed)
@@ -289,26 +294,26 @@ class MonteCarloPricer:
             Array of terminal prices with shape (2 * num_simulations,).
         """
         rng = np.random.default_rng(seed if seed is not None else self.seed)
-        
+
         dt = T / self.num_steps
-        drift = (r - q - 0.5 * sigma ** 2) * dt
+        drift = (r - q - 0.5 * sigma**2) * dt
         vol = sigma * np.sqrt(dt)
 
         # Generate random normals for all paths and steps
         rand_normals = rng.standard_normal((self.num_simulations, self.num_steps))
-        
+
         # Compute log price increments
         increments = drift + vol * rand_normals
         antithetic_increments = drift - vol * rand_normals  # Antithetic paths
-        
+
         # Cumulative sum for path simulation
         log_paths_pos = np.log(S) + np.cumsum(increments, axis=1)
         log_paths_neg = np.log(S) + np.cumsum(antithetic_increments, axis=1)
-        
+
         # Extract terminal prices
         terminal_pos = np.exp(log_paths_pos[:, -1])
         terminal_neg = np.exp(log_paths_neg[:, -1])
-        
+
         return np.concatenate([terminal_pos, terminal_neg])
 
     def _simulate_terminal_prices(
@@ -338,17 +343,15 @@ class MonteCarloPricer:
             Array of terminal prices.
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         if self.use_numba:
             if self.use_parallel:
                 return _simulate_terminal_prices_numba_parallel(
-                    S, T, r, sigma, q,
-                    self.num_simulations, self.num_steps, actual_seed
+                    S, T, r, sigma, q, self.num_simulations, self.num_steps, actual_seed
                 )
             else:
                 return _simulate_terminal_prices_numba_single(
-                    S, T, r, sigma, q,
-                    self.num_simulations, self.num_steps, actual_seed
+                    S, T, r, sigma, q, self.num_simulations, self.num_steps, actual_seed
                 )
         return self._simulate_terminal_prices_vectorized(S, T, r, sigma, q, actual_seed)
 
@@ -388,14 +391,14 @@ class MonteCarloPricer:
             >>> put_price = pricer.price(100, 100, 1.0, 0.05, 0.2, 'put')
         """
         self._validate_inputs(S, K, T, r, sigma, option_type, q)
-        
+
         terminal_prices = self._simulate_terminal_prices(S, T, r, sigma, q, seed)
-        
+
         if option_type == "call":
             payoffs = np.maximum(terminal_prices - K, 0.0)
         else:
             payoffs = np.maximum(K - terminal_prices, 0.0)
-        
+
         return float(np.exp(-r * T) * np.mean(payoffs))
 
     def price_with_std_error(
@@ -434,18 +437,18 @@ class MonteCarloPricer:
             >>> print(f"Price: {price:.4f} ± {1.96 * std_err:.4f} (95% CI)")
         """
         self._validate_inputs(S, K, T, r, sigma, option_type, q)
-        
+
         terminal_prices = self._simulate_terminal_prices(S, T, r, sigma, q, seed)
-        
+
         if option_type == "call":
             payoffs = np.maximum(terminal_prices - K, 0.0)
         else:
             payoffs = np.maximum(K - terminal_prices, 0.0)
-        
+
         discounted = np.exp(-r * T) * payoffs
         price = float(np.mean(discounted))
         std_error = float(np.std(discounted) / np.sqrt(len(discounted)))
-        
+
         return price, std_error
 
     def delta(
@@ -482,11 +485,11 @@ class MonteCarloPricer:
             Estimated Delta value.
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         # Use same seed for variance reduction (CRN)
         price_up = self.price(S + h, K, T, r, sigma, option_type, q, actual_seed)
         price_down = self.price(S - h, K, T, r, sigma, option_type, q, actual_seed)
-        
+
         return (price_up - price_down) / (2 * h)
 
     def gamma(
@@ -522,11 +525,11 @@ class MonteCarloPricer:
             Estimated Gamma value.
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         price_up = self.price(S + h, K, T, r, sigma, option_type, q, actual_seed)
         price_mid = self.price(S, K, T, r, sigma, option_type, q, actual_seed)
         price_down = self.price(S - h, K, T, r, sigma, option_type, q, actual_seed)
-        
+
         return (price_up - 2 * price_mid + price_down) / (h * h)
 
     def delta_gamma(
@@ -562,14 +565,14 @@ class MonteCarloPricer:
             Tuple of (delta, gamma).
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         price_up = self.price(S + h, K, T, r, sigma, option_type, q, actual_seed)
         price_mid = self.price(S, K, T, r, sigma, option_type, q, actual_seed)
         price_down = self.price(S - h, K, T, r, sigma, option_type, q, actual_seed)
-        
+
         delta = (price_up - price_down) / (2 * h)
         gamma = (price_up - 2 * price_mid + price_down) / (h * h)
-        
+
         return delta, gamma
 
     def vega(
@@ -605,10 +608,10 @@ class MonteCarloPricer:
             Estimated Vega value.
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         price_up = self.price(S, K, T, r, sigma + h, option_type, q, actual_seed)
         price_down = self.price(S, K, T, r, sigma - h, option_type, q, actual_seed)
-        
+
         return (price_up - price_down) / (2 * h)
 
     def theta(
@@ -644,12 +647,14 @@ class MonteCarloPricer:
             Estimated Theta (negative for long positions).
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         if T > dt:
             price_now = self.price(S, K, T, r, sigma, option_type, q, actual_seed)
-            price_later = self.price(S, K, T - dt, r, sigma, option_type, q, actual_seed)
+            price_later = self.price(
+                S, K, T - dt, r, sigma, option_type, q, actual_seed
+            )
             return (price_later - price_now) / dt
-        
+
         return -self.price(S, K, T, r, sigma, option_type, q, actual_seed) / dt
 
     def rho(
@@ -685,10 +690,10 @@ class MonteCarloPricer:
             Estimated Rho value.
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         price_up = self.price(S, K, T, r + h, sigma, option_type, q, actual_seed)
         price_base = self.price(S, K, T, r, sigma, option_type, q, actual_seed)
-        
+
         return (price_up - price_base) / h
 
     def all_greeks(
@@ -728,12 +733,14 @@ class MonteCarloPricer:
             >>> print(f"Delta: {greeks['delta']:.4f}")
         """
         actual_seed = seed if seed is not None else self.seed
-        
-        delta, gamma = self.delta_gamma(S, K, T, r, sigma, option_type, q, seed=actual_seed)
+
+        delta, gamma = self.delta_gamma(
+            S, K, T, r, sigma, option_type, q, seed=actual_seed
+        )
         vega = self.vega(S, K, T, r, sigma, option_type, q, seed=actual_seed)
         theta = self.theta(S, K, T, r, sigma, option_type, q, seed=actual_seed)
         rho = self.rho(S, K, T, r, sigma, option_type, q, seed=actual_seed)
-        
+
         return {
             "delta": delta,
             "gamma": gamma,

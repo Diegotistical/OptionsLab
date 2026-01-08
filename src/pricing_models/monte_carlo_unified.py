@@ -32,22 +32,27 @@ import pandas as pd
 # Check for optional dependencies
 try:
     from numba import njit, prange
+
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    
+
     def njit(*args, **kwargs):
         """Dummy decorator when Numba not installed."""
+
         def decorator(func):
             return func
+
         return decorator if not args else decorator(args[0])
-    
+
     def prange(*args):
         """Dummy prange that falls back to range."""
         return range(*args)
 
+
 try:
     import cupy as cp
+
     GPU_AVAILABLE = True
 except ImportError:
     GPU_AVAILABLE = False
@@ -56,6 +61,7 @@ except ImportError:
 # ML imports for surrogate
 try:
     import lightgbm as lgb
+
     LIGHTGBM_AVAILABLE = True
 except ImportError:
     LIGHTGBM_AVAILABLE = False
@@ -82,13 +88,16 @@ logger = logging.getLogger(__name__)
 # Exceptions
 # =============================================================================
 
+
 class InputValidationError(Exception):
     """Raised when inputs to Monte Carlo or ML methods are invalid."""
+
     pass
 
 
 class MonteCarloError(Exception):
     """Raised for unexpected Monte Carlo computation errors."""
+
     pass
 
 
@@ -97,6 +106,7 @@ class MonteCarloError(Exception):
 # =============================================================================
 
 if NUMBA_AVAILABLE:
+
     @njit(cache=True, fastmath=True)
     def _simulate_single_path_numba(
         S: float,
@@ -125,11 +135,11 @@ if NUMBA_AVAILABLE:
         dt = T / num_steps
         drift = (r - q - 0.5 * sigma * sigma) * dt
         vol = sigma * np.sqrt(dt)
-        
+
         log_S = np.log(S)
         for t in range(num_steps):
             log_S += drift + vol * z_values[t]
-        
+
         return np.exp(log_S)
 
     @njit(parallel=True, cache=True, fastmath=True)
@@ -164,33 +174,33 @@ if NUMBA_AVAILABLE:
         """
         n_options = len(S_arr)
         terminal_prices = np.empty((n_options, num_simulations * 2), dtype=np.float64)
-        
+
         for opt_idx in prange(n_options):
             S = S_arr[opt_idx]
             T = T_arr[opt_idx]
             r = r_arr[opt_idx]
             sigma = sigma_arr[opt_idx]
             q = q_arr[opt_idx]
-            
+
             dt = T / num_steps
             drift = (r - q - 0.5 * sigma * sigma) * dt
             vol = sigma * np.sqrt(dt)
-            
+
             # Set seed unique to this option
             np.random.seed(seed + opt_idx)
-            
+
             for sim_idx in range(num_simulations):
                 log_S_pos = np.log(S)
                 log_S_neg = np.log(S)
-                
+
                 for t in range(num_steps):
                     z = np.random.randn()
                     log_S_pos += drift + vol * z
                     log_S_neg += drift - vol * z
-                
+
                 terminal_prices[opt_idx, sim_idx] = np.exp(log_S_pos)
                 terminal_prices[opt_idx, sim_idx + num_simulations] = np.exp(log_S_neg)
-        
+
         return terminal_prices
 
     @njit(cache=True, fastmath=True)
@@ -212,14 +222,14 @@ if NUMBA_AVAILABLE:
         """
         n = len(terminal_prices)
         payoffs = np.empty(n, dtype=np.float64)
-        
+
         if is_call:
             for i in range(n):
                 payoffs[i] = max(terminal_prices[i] - K, 0.0)
         else:
             for i in range(n):
                 payoffs[i] = max(K - terminal_prices[i], 0.0)
-        
+
         return payoffs
 
 
@@ -268,15 +278,17 @@ class MonteCarloPricerUni:
             raise InputValidationError(
                 "num_simulations and num_steps must be positive integers"
             )
-        
+
         self.num_simulations = num_simulations
         self.num_steps = num_steps
-        self.seed = seed if seed is not None else np.random.default_rng().integers(0, 2**31)
+        self.seed = (
+            seed if seed is not None else np.random.default_rng().integers(0, 2**31)
+        )
         self.rng = np.random.default_rng(seed)
         self.use_numba = use_numba and NUMBA_AVAILABLE
         self.use_gpu = use_gpu and GPU_AVAILABLE
         self._lock = threading.RLock()
-        
+
         logger.info(
             f"MonteCarloPricerUni initialized: "
             f"simulations={num_simulations}, steps={num_steps}, "
@@ -308,24 +320,26 @@ class MonteCarloPricerUni:
         """
         rng = np.random.default_rng(seed if seed is not None else self.seed)
         n = len(S_arr)
-        
+
         dt = T_arr / self.num_steps
         drift = (r_arr - q_arr - 0.5 * sigma_arr**2)[:, None] * dt[:, None]
         vol = sigma_arr[:, None] * np.sqrt(dt[:, None])
-        
+
         # Generate random normals: (n_options, n_sims, n_steps)
         Z = rng.standard_normal((n, self.num_simulations, self.num_steps))
-        
+
         # Compute log price paths
         log_S = np.log(S_arr)[:, None, None]
         log_increments = drift[:, None, :] + vol[:, None, :] * Z
         log_paths_pos = log_S + np.cumsum(log_increments, axis=2)
-        log_paths_neg = log_S + np.cumsum(drift[:, None, :] - vol[:, None, :] * Z, axis=2)
-        
+        log_paths_neg = log_S + np.cumsum(
+            drift[:, None, :] - vol[:, None, :] * Z, axis=2
+        )
+
         # Extract terminal prices
         terminal_pos = np.exp(log_paths_pos[:, :, -1])
         terminal_neg = np.exp(log_paths_neg[:, :, -1])
-        
+
         return np.concatenate([terminal_pos, terminal_neg], axis=1)
 
     def _simulate_terminal_prices_gpu(
@@ -353,38 +367,38 @@ class MonteCarloPricerUni:
         """
         if cp is None:
             raise MonteCarloError("CuPy is not available for GPU computation")
-        
+
         n = len(S_arr)
         actual_seed = seed if seed is not None else self.seed
-        
+
         # Transfer to GPU
         S_gpu = cp.asarray(S_arr)
         T_gpu = cp.asarray(T_arr)
         r_gpu = cp.asarray(r_arr)
         sigma_gpu = cp.asarray(sigma_arr)
         q_gpu = cp.asarray(q_arr)
-        
+
         dt = T_gpu / self.num_steps
         drift = (r_gpu - q_gpu - 0.5 * sigma_gpu**2)[:, None] * dt[:, None]
         vol = sigma_gpu[:, None] * cp.sqrt(dt[:, None])
-        
+
         # Generate random normals on GPU
         cp.random.seed(actual_seed)
         Z = cp.random.randn(n, self.num_simulations, self.num_steps)
-        
+
         # Compute paths
         log_S = cp.log(S_gpu)[:, None, None]
         log_increments_pos = drift[:, None, :] + vol[:, None, :] * Z
         log_increments_neg = drift[:, None, :] - vol[:, None, :] * Z
-        
+
         log_paths_pos = log_S + cp.cumsum(log_increments_pos, axis=2)
         log_paths_neg = log_S + cp.cumsum(log_increments_neg, axis=2)
-        
+
         terminal_pos = cp.exp(log_paths_pos[:, :, -1])
         terminal_neg = cp.exp(log_paths_neg[:, :, -1])
-        
+
         result = cp.concatenate([terminal_pos, terminal_neg], axis=1)
-        
+
         return cp.asnumpy(result)
 
     def _simulate_terminal_prices(
@@ -413,15 +427,21 @@ class MonteCarloPricerUni:
             Array of terminal prices.
         """
         actual_seed = seed if seed is not None else self.seed
-        
+
         if self.use_gpu:
             return self._simulate_terminal_prices_gpu(
                 S_arr, T_arr, r_arr, sigma_arr, q_arr, actual_seed
             )
         elif self.use_numba:
             return _simulate_batch_numba(
-                S_arr, T_arr, r_arr, sigma_arr, q_arr,
-                self.num_simulations, self.num_steps, actual_seed
+                S_arr,
+                T_arr,
+                r_arr,
+                sigma_arr,
+                q_arr,
+                self.num_simulations,
+                self.num_steps,
+                actual_seed,
             )
         else:
             return self._simulate_terminal_prices_vectorized(
@@ -469,7 +489,7 @@ class MonteCarloPricerUni:
             )
         if option_type not in {"call", "put"}:
             raise InputValidationError("option_type must be 'call' or 'put'")
-        
+
         try:
             terminal_prices = self._simulate_terminal_prices(
                 np.array([S]),
@@ -479,14 +499,14 @@ class MonteCarloPricerUni:
                 np.array([q]),
                 seed=seed,
             )[0]
-            
+
             if option_type == "call":
                 payoffs = np.maximum(terminal_prices - K, 0.0)
             else:
                 payoffs = np.maximum(K - terminal_prices, 0.0)
-            
+
             return float(np.exp(-r * T) * np.mean(payoffs))
-            
+
         except Exception as e:
             raise MonteCarloError(f"Monte Carlo pricing failed: {e}")
 
@@ -528,15 +548,15 @@ class MonteCarloPricerUni:
         """
         if seed is None:
             seed = int(self.rng.integers(0, 2**31))
-        
+
         # Use same seed for all three prices (CRN)
         price_up = self.price(S + h, K, T, r, sigma, option_type, q, seed=seed)
         price_mid = self.price(S, K, T, r, sigma, option_type, q, seed=seed)
         price_down = self.price(S - h, K, T, r, sigma, option_type, q, seed=seed)
-        
+
         delta = (price_up - price_down) / (2 * h)
-        gamma = (price_up - 2 * price_mid + price_down) / (h ** 2)
-        
+        gamma = (price_up - 2 * price_mid + price_down) / (h**2)
+
         return delta, gamma
 
     def price_batch(
@@ -583,19 +603,19 @@ class MonteCarloPricerUni:
         T_vals = np.asarray(T_vals, dtype=np.float64)
         r_vals = np.asarray(r_vals, dtype=np.float64)
         sigma_vals = np.asarray(sigma_vals, dtype=np.float64)
-        
+
         if isinstance(q_vals, (int, float)):
             q_vals = np.full_like(S_vals, q_vals)
         else:
             q_vals = np.asarray(q_vals, dtype=np.float64)
-        
+
         n = len(S_vals)
-        
+
         # Simulate all terminal prices at once - shape (n, 2*num_sims)
         terminal_prices = self._simulate_terminal_prices(
             S_vals, T_vals, r_vals, sigma_vals, q_vals
         )
-        
+
         # FULLY VECTORIZED payoff calculation - O(n) with broadcasting
         # terminal_prices: (n, num_sims*2), K_vals: (n,)
         # Use broadcasting: K_vals[:, None] creates (n, 1) for subtraction
@@ -603,11 +623,11 @@ class MonteCarloPricerUni:
             payoffs = np.maximum(terminal_prices - K_vals[:, None], 0.0)
         else:
             payoffs = np.maximum(K_vals[:, None] - terminal_prices, 0.0)
-        
+
         # Vectorized discounting and mean - no loop needed
         discount_factors = np.exp(-r_vals * T_vals)
         prices = discount_factors * np.mean(payoffs, axis=1)
-        
+
         return prices
 
     def delta_gamma_batch(
@@ -645,12 +665,12 @@ class MonteCarloPricerUni:
         T_vals = np.asarray(T_vals, dtype=np.float64)
         r_vals = np.asarray(r_vals, dtype=np.float64)
         sigma_vals = np.asarray(sigma_vals, dtype=np.float64)
-        
+
         if isinstance(q_vals, (int, float)):
             q_vals = np.full_like(S_vals, q_vals)
         else:
             q_vals = np.asarray(q_vals, dtype=np.float64)
-        
+
         # Compute prices at S-h, S, S+h using same seed (CRN)
         prices_down = self.price_batch(
             S_vals - h, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals
@@ -661,11 +681,11 @@ class MonteCarloPricerUni:
         prices_up = self.price_batch(
             S_vals + h, K_vals, T_vals, r_vals, sigma_vals, option_type, q_vals
         )
-        
+
         # Vectorized finite differences
         deltas = (prices_up - prices_down) / (2 * h)
-        gammas = (prices_up - 2 * prices_mid + prices_down) / (h ** 2)
-        
+        gammas = (prices_up - 2 * prices_mid + prices_down) / (h**2)
+
         return deltas, gammas
 
 
@@ -719,12 +739,14 @@ class MLSurrogate:
                     max_depth=max_depth,
                     random_state=random_state,
                 )
-            
-            self.model = Pipeline([
-                ("scaler", StandardScaler()),
-                ("regressor", MultiOutputRegressor(base_model)),
-            ])
-        
+
+            self.model = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("regressor", MultiOutputRegressor(base_model)),
+                ]
+            )
+
         self.trained = False
 
     def fit(
@@ -745,30 +767,32 @@ class MLSurrogate:
             Self for method chaining.
         """
         mc_prices, mc_deltas, mc_gammas = [], [], []
-        
+
         for _, row in df.iterrows():
             S, K, T, r, sigma, q = row[["S", "K", "T", "r", "sigma", "q"]]
-            
+
             # Use deterministic seed for training stability
             row_seed = 42 + int(S * 100) % 10000
-            
+
             p = pricer.price(S, K, T, r, sigma, option_type, q, seed=row_seed)
             d, g = pricer.delta_gamma(S, K, T, r, sigma, option_type, q, seed=row_seed)
-            
+
             mc_prices.append(p)
             mc_deltas.append(d)
             mc_gammas.append(g)
-        
-        y = pd.DataFrame({
-            "price": mc_prices,
-            "delta": mc_deltas,
-            "gamma": mc_gammas,
-        })
+
+        y = pd.DataFrame(
+            {
+                "price": mc_prices,
+                "delta": mc_deltas,
+                "gamma": mc_gammas,
+            }
+        )
         X = df[["S", "K", "T", "r", "sigma", "q"]].values
-        
+
         self.model.fit(X, y)
         self.trained = True
-        
+
         return self
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -786,8 +810,8 @@ class MLSurrogate:
         """
         if not self.trained:
             raise RuntimeError("Surrogate model not trained")
-        
+
         X = df[["S", "K", "T", "r", "sigma", "q"]].values
         y_pred = self.model.predict(X)
-        
+
         return pd.DataFrame(y_pred, columns=["price", "delta", "gamma"])

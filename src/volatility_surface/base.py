@@ -98,6 +98,19 @@ class VolatilityModelBase(ABC, Generic[ModelType]):
     def _on_load_model_start(self, model_path: str, scaler_path: str) -> None: ...
     def _on_load_model_end(self, model_path: str, scaler_path: str) -> None: ...
 
+    def validate_input(self, df: pd.DataFrame) -> None:
+        """
+        Public alias for _validate_features. Validates that DataFrame contains
+        required feature columns with valid numeric data.
+
+        Args:
+            df: DataFrame to validate.
+
+        Raises:
+            ValueError: If required columns are missing, non-numeric, or contain NaN/inf.
+        """
+        self._validate_features(df)
+
     #  Public API
     @benchmark_method("_enable_benchmark")
     def train(self, df: pd.DataFrame, val_split: float = 0.2) -> Dict[str, float]:

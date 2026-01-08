@@ -13,14 +13,16 @@ Components:
     - apply_custom_css: Dark theme styling
 """
 
-import streamlit as st
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 import plotly.graph_objects as go
+import streamlit as st
 
 
 def apply_custom_css() -> None:
     """Apply global dark-theme custom CSS for sleek, modern look."""
-    st.markdown("""
+    st.markdown(
+        """
     <style>
         /* Full width layout */
         .main .block-container {
@@ -170,13 +172,15 @@ def apply_custom_css() -> None:
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def page_header(title: str, subtitle: str = "") -> None:
     """
     Render a styled page header.
-    
+
     Args:
         title: Main page title
         subtitle: Optional subtitle description
@@ -187,14 +191,11 @@ def page_header(title: str, subtitle: str = "") -> None:
 
 
 def metric_card(
-    label: str,
-    value: str,
-    delta: Optional[str] = None,
-    delta_color: str = "normal"
+    label: str, value: str, delta: Optional[str] = None, delta_color: str = "normal"
 ) -> None:
     """
     Render a styled metric card.
-    
+
     Args:
         label: Metric label text
         value: Metric value to display
@@ -202,15 +203,20 @@ def metric_card(
         delta_color: 'normal' (green), 'negative' (red), or 'neutral' (gray)
     """
     delta_class = "negative" if delta_color == "negative" else ""
-    delta_html = f'<div class="metric-delta {delta_class}">{delta}</div>' if delta else ""
-    
-    st.markdown(f"""
+    delta_html = (
+        f'<div class="metric-delta {delta_class}">{delta}</div>' if delta else ""
+    )
+
+    st.markdown(
+        f"""
     <div class="metric-card">
         <div class="metric-label">{label}</div>
         <div class="metric-value">{value}</div>
         {delta_html}
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def section_divider() -> None:
@@ -225,7 +231,7 @@ def input_section_start() -> None:
 
 def input_section_end() -> None:
     """End an input section container."""
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def option_input_grid(
@@ -234,105 +240,138 @@ def option_input_grid(
 ) -> Dict[str, Any]:
     """
     Render standard option parameter inputs in a grid layout.
-    
+
     Returns dict with: S, K, T, r, sigma, q, option_type
     """
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.markdown("**Asset**")
         S = st.number_input(
             "Spot Price ($)",
-            min_value=1.0, max_value=1000.0, value=100.0, step=1.0,
-            key=f"{key_prefix}spot"
+            min_value=1.0,
+            max_value=1000.0,
+            value=100.0,
+            step=1.0,
+            key=f"{key_prefix}spot",
         )
         K = st.number_input(
             "Strike Price ($)",
-            min_value=1.0, max_value=1000.0, value=100.0, step=1.0,
-            key=f"{key_prefix}strike"
+            min_value=1.0,
+            max_value=1000.0,
+            value=100.0,
+            step=1.0,
+            key=f"{key_prefix}strike",
         )
-    
+
     with col2:
         st.markdown("**Time**")
         T = st.number_input(
             "Time to Maturity (years)",
-            min_value=0.01, max_value=5.0, value=1.0, step=0.05,
-            key=f"{key_prefix}time"
+            min_value=0.01,
+            max_value=5.0,
+            value=1.0,
+            step=0.05,
+            key=f"{key_prefix}time",
         )
         option_type = st.selectbox(
-            "Option Type",
-            ["call", "put"],
-            key=f"{key_prefix}type"
+            "Option Type", ["call", "put"], key=f"{key_prefix}type"
         )
-    
+
     with col3:
         st.markdown("**Market**")
-        r = st.number_input(
-            "Risk-Free Rate (%)",
-            min_value=0.0, max_value=20.0, value=5.0, step=0.5,
-            key=f"{key_prefix}rate"
-        ) / 100.0
-        sigma = st.number_input(
-            "Volatility (%)",
-            min_value=1.0, max_value=200.0, value=20.0, step=1.0,
-            key=f"{key_prefix}vol"
-        ) / 100.0
-    
+        r = (
+            st.number_input(
+                "Risk-Free Rate (%)",
+                min_value=0.0,
+                max_value=20.0,
+                value=5.0,
+                step=0.5,
+                key=f"{key_prefix}rate",
+            )
+            / 100.0
+        )
+        sigma = (
+            st.number_input(
+                "Volatility (%)",
+                min_value=1.0,
+                max_value=200.0,
+                value=20.0,
+                step=1.0,
+                key=f"{key_prefix}vol",
+            )
+            / 100.0
+        )
+
     with col4:
         st.markdown("**Simulation**")
         if show_dividends:
-            q = st.number_input(
-                "Dividend Yield (%)",
-                min_value=0.0, max_value=20.0, value=0.0, step=0.5,
-                key=f"{key_prefix}div"
-            ) / 100.0
+            q = (
+                st.number_input(
+                    "Dividend Yield (%)",
+                    min_value=0.0,
+                    max_value=20.0,
+                    value=0.0,
+                    step=0.5,
+                    key=f"{key_prefix}div",
+                )
+                / 100.0
+            )
         else:
             q = 0.0
-        
+
         run_btn = st.button(
             "🚀 Calculate",
             type="primary",
             use_container_width=True,
-            key=f"{key_prefix}run"
+            key=f"{key_prefix}run",
         )
-    
+
     return {
-        "S": S, "K": K, "T": T, "r": r, "sigma": sigma,
-        "q": q, "option_type": option_type, "run": run_btn
+        "S": S,
+        "K": K,
+        "T": T,
+        "r": r,
+        "sigma": sigma,
+        "q": q,
+        "option_type": option_type,
+        "run": run_btn,
     }
 
 
 def simulation_input_grid(key_prefix: str = "") -> Dict[str, Any]:
     """
     Render Monte Carlo simulation settings.
-    
+
     Returns dict with: num_sims, num_steps, seed, use_numba
     """
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         num_sims = st.select_slider(
             "Simulations",
             options=[1000, 5000, 10000, 25000, 50000, 100000],
             value=10000,
-            key=f"{key_prefix}sims"
+            key=f"{key_prefix}sims",
         )
-    
+
     with col2:
         num_steps = st.select_slider(
             "Time Steps",
             options=[10, 25, 50, 100, 200, 500],
             value=50,
-            key=f"{key_prefix}steps"
+            key=f"{key_prefix}steps",
         )
-    
+
     with col3:
         seed = st.number_input(
             "Random Seed",
-            min_value=1, max_value=99999, value=42,
-            key=f"{key_prefix}seed"
+            min_value=1,
+            max_value=99999,
+            value=42,
+            key=f"{key_prefix}seed",
         )
-    
+
     return {"num_sims": num_sims, "num_steps": num_steps, "seed": seed}
 
 

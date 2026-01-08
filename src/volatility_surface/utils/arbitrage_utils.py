@@ -210,9 +210,9 @@ def validate_domain(X: np.ndarray, reference_X: np.ndarray = None) -> float:
 
     Parameters
     ----------
-    X : np.ndarray
+    X : np.ndarray or pd.DataFrame
         Feature matrix after engineering (n_samples x n_features)
-    reference_X : np.ndarray, optional
+    reference_X : np.ndarray or pd.DataFrame, optional
         Reference features (e.g., training features) to compare distribution
 
     Returns
@@ -220,6 +220,13 @@ def validate_domain(X: np.ndarray, reference_X: np.ndarray = None) -> float:
     validity_score : float
         Fraction of samples passing simple arbitrage-free checks (0.0 - 1.0)
     """
+    import pandas as pd
+
+    # Convert DataFrame to numpy array if needed
+    if isinstance(X, pd.DataFrame):
+        X = X.values
+    if reference_X is not None and isinstance(reference_X, pd.DataFrame):
+        reference_X = reference_X.values
 
     # Example heuristic checks:
 
