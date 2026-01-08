@@ -230,21 +230,49 @@ def set_global_seed(seed: int):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    FINAL PERFORMANCE                             │
+│                    PERFORMANCE ANALYSIS                          │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   Method             Time (ms)    Error vs BS    Use Case       │
-│   ─────────────────  ──────────   ───────────    ────────       │
+│   Method                  Time (ms)    Error vs BS    Notes     │
+│   ──────────────────────  ──────────   ───────────    ───────   │
 │                                                                  │
-│   Monte Carlo (10K)     150          0.5%        Validation     │
-│   Monte Carlo (1K)       15          1.5%        Quick est.     │
-│   Black-Scholes         0.01         0.0%        European only  │
-│   ML Surrogate          0.3         <1.0%        Real-time      │
+│   Vectorized MC (10K)       ~0.3         0.5%        NumPy opt. │
+│   Vectorized MC (100K)      ~3.0         0.2%        High acc.  │
+│   Black-Scholes             0.01         0.0%        European   │
+│   ML Surrogate (single)    ~140          5-10%       Overhead   │
 │                                                                  │
-│   ML Surrogate: 500x faster than MC, 1% accuracy                │
+│   THEORETICAL FLOP COMPARISON:                                   │
+│   Monte Carlo: ~630,000 ops/option                              │
+│   LightGBM:    ~2,400 ops/option                                │
+│   Ratio: 262x fewer operations for ML                           │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### When ML Surrogates Actually Win
+
+The ML surrogate does NOT beat vectorized NumPy Monte Carlo for single European options.
+
+**Where ML wins:**
+
+1. **Exotic Options (path-dependent)**
+
+   - Asian, Barrier, Lookback options
+   - MC cannot be fully vectorized for these
+
+2. **Greeks Computation**
+
+   - MC needs multiple simulations or finite differences
+   - ML computes all Greeks in a single forward pass
+
+3. **Batch Calibration**
+
+   - Pricing 1000s of options for model calibration
+   - ML is faster for parameter sweeps
+
+4. **Real-time Streaming**
+   - MC has variance (different results each call)
+   - ML is deterministic (consistent latency)
 
 ### Key Takeaways
 
@@ -255,6 +283,8 @@ def set_global_seed(seed: int):
 3. **Training data distribution must match inference** - Uniform random sampling works poorly for edge cases
 
 4. **Reproducibility requires intentional design** - Not just seeding, but thread control and algorithm selection
+
+5. **Know your baseline** - Vectorized NumPy is extremely fast; ML surrogates are for exotic options, not vanilla European
 
 ---
 
