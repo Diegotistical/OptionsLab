@@ -71,6 +71,19 @@ class ExoticOptionBase(ABC):
         """Compute option price via Monte Carlo."""
         pass
 
+    # Greeks are computed via src.greeks.unified_greeks.compute_greeks_unified()
+    # Exotic options need a custom adapter or wrapper.
+    # Example usage:
+    #   from src.greeks import compute_greeks_unified
+    #   # Create a wrapper that conforms to PricerProtocol
+    #   class ExoticAdapter:
+    #       def __init__(self, exotic): self.exotic = exotic
+    #       def price(self, S, K, T, r, sigma, option_type, q=0.0, **kw):
+    #           self.exotic.S, self.exotic.K, self.exotic.T = S, K, T
+    #           self.exotic.r, self.exotic.sigma = r, sigma
+    #           return self.exotic.price(**kw)
+    #   greeks = compute_greeks_unified(ExoticAdapter(asian_opt), ...)
+
 
 @dataclass
 class AsianOption(ExoticOptionBase):
@@ -329,6 +342,216 @@ class AmericanOption(ExoticOptionBase):
                 boundary[t] = np.nan
 
         return times, boundary
+
+
+@dataclass
+class LookbackOption(ExoticOptionBase):
+    """
+    Lookback Option pricing via Monte Carlo.
+
+    Lookback options have payoffs depending on the extremum (max or min)
+    of the underlying price over the option's life.
+
+    Types:
+        - Floating strike: K is set to the min (call) or max (put) observed
+        - Fixed strike: Payoff based on max (call) or min (put) observed
+    """
+
+    def price(
+        self,
+        n_paths: int = 100000,
+        n_steps: int = 252,
+        lookback_type: Literal["floating", "fixed"] = "floating",
+        option_type: Literal["call", "put"] = "call",
+    ) -> float:
+        """
+        Price lookback option.
+
+        Args:
+            n_paths: Number of simulation paths.
+            n_steps: Number of time steps.
+            lookback_type: 'floating' or 'fixed' strike.
+            option_type: 'call' or 'put'.
+
+        Returns:
+            Option price.
+        """
+        paths = self._generate_paths(n_paths, n_steps)
+        S_T = paths[:, -1]
+        S_max = np.max(paths, axis=1)
+        S_min = np.min(paths, axis=1)
+
+        if lookback_type == "floating":
+            # Floating strike: strike is path-dependent
+            if option_type == "call":
+                # Call: pay S_T - S_min (buy at minimum)
+                payoffs = S_T - S_min
+            else:
+                # Put: pay S_max - S_T (sell at maximum)
+                payoffs = S_max - S_T
+        else:
+            # Fixed strike
+            if option_type == "call":
+                # Call: pay max(S_max - K, 0)
+                payoffs = np.maximum(S_max - self.K, 0)
+            else:
+                # Put: pay max(K - S_min, 0)
+                payoffs = np.maximum(self.K - S_min, 0)
+
+        return np.exp(-self.r * self.T) * np.mean(payoffs)
+
+
+@dataclass
+class AutocallableOption(ExoticOptionBase):
+    """
+    Autocallable (Snowball) structured product pricing.
+
+    Autocallables pay a coupon if the underlying is above a barrier
+    on observation dates, and knock out (redeem early) if it exceeds
+    an autocall barrier.
+
+    Popular in Asian and European structured products markets.
+    """
+
+    autocall_barrier: float = 1.0  # Autocall level (relative to spot)
+    coupon_barrier: float = 0.8  # Coupon payment barrier
+    coupon_rate: float = 0.10  # Annual coupon rate
+    ki_barrier: float = 0.6  # Knock-in (put) barrier
+
+    def price(
+        self,
+        n_paths: int = 100000,
+        n_steps: int = 252,
+        observation_freq: int = 21,  # ~monthly
+        **kwargs,
+    ) -> float:
+        """
+        Price autocallable product.
+
+        Args:
+            n_paths: Number of simulation paths.
+            n_steps: Number of time steps.
+            observation_freq: Steps between observations.
+
+        Returns:
+            Product price as percentage of notional.
+        """
+        paths = self._generate_paths(n_paths, n_steps)
+        dt = self.T / n_steps
+
+        # Observation times (indices)
+        obs_times = list(range(observation_freq, n_steps + 1, observation_freq))
+        n_obs = len(obs_times)
+
+        # Initialize payoffs
+        payoffs = np.zeros(n_paths)
+        redeemed = np.zeros(n_paths, dtype=bool)
+
+        # Track knock-in event
+        min_path = np.min(paths / self.S, axis=1)
+        knocked_in = min_path <= self.ki_barrier
+
+        for i, t in enumerate(obs_times):
+            active = ~redeemed
+            S_t = paths[active, t]
+            S_rel = S_t / self.S
+
+            # Check autocall
+            autocall_mask = S_rel >= self.autocall_barrier
+            autocall_indices = np.where(active)[0][autocall_mask]
+
+            # Coupon + principal for autocalled paths
+            time_fraction = (i + 1) / n_obs
+            coupon = self.coupon_rate * time_fraction * self.T
+            payoffs[autocall_indices] = (1 + coupon) * np.exp(-self.r * t * dt)
+            redeemed[autocall_indices] = True
+
+        # Final observation for non-redeemed paths
+        still_active = ~redeemed
+        S_final = paths[still_active, -1]
+        S_rel_final = S_final / self.S
+
+        # If knocked in, act like a put
+        ki_active = knocked_in[still_active]
+
+        # Payoffs at maturity
+        final_payoffs = np.ones(np.sum(still_active))
+
+        # Add coupon if above coupon barrier
+        above_coupon = S_rel_final >= self.coupon_barrier
+        final_payoffs[above_coupon] += self.coupon_rate * self.T
+
+        # Apply knock-in loss if breached and below strike
+        below_strike = S_rel_final < 1.0
+        loss_mask = ki_active & below_strike
+        final_payoffs[loss_mask] = S_rel_final[loss_mask]
+
+        payoffs[still_active] = final_payoffs * np.exp(-self.r * self.T)
+
+        return np.mean(payoffs)
+
+
+@dataclass
+class CliquetOption(ExoticOptionBase):
+    """
+    Cliquet (Ratchet) Option pricing.
+
+    Cliquet options pay based on the sum of capped/floored local returns
+    over a series of reset periods.
+
+    Popular in equity-linked structured products.
+    """
+
+    local_cap: float = 0.05  # Cap on each period's return
+    local_floor: float = -0.05  # Floor on each period's return
+    global_cap: float = 0.30  # Cap on total return
+    global_floor: float = 0.0  # Floor on total return
+
+    def price(
+        self,
+        n_paths: int = 100000,
+        n_steps: int = 252,
+        n_periods: int = 12,  # Number of reset periods
+        **kwargs,
+    ) -> float:
+        """
+        Price cliquet option.
+
+        Args:
+            n_paths: Number of simulation paths.
+            n_steps: Number of time steps.
+            n_periods: Number of cliquet periods.
+
+        Returns:
+            Option price.
+        """
+        paths = self._generate_paths(n_paths, n_steps)
+
+        # Period boundaries
+        steps_per_period = n_steps // n_periods
+        total_return = np.zeros(n_paths)
+
+        for p in range(n_periods):
+            start_idx = p * steps_per_period
+            end_idx = (p + 1) * steps_per_period
+
+            S_start = paths[:, start_idx]
+            S_end = paths[:, end_idx]
+
+            # Local return
+            local_return = (S_end - S_start) / S_start
+
+            # Apply local cap/floor
+            capped_return = np.clip(local_return, self.local_floor, self.local_cap)
+            total_return += capped_return
+
+        # Apply global cap/floor
+        total_return = np.clip(total_return, self.global_floor, self.global_cap)
+
+        # Payoff is notional * total_return (minimum 0)
+        payoffs = np.maximum(total_return, 0) * self.S
+
+        return np.exp(-self.r * self.T) * np.mean(payoffs)
 
 
 # Convenience functions

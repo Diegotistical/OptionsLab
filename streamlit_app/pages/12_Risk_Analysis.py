@@ -88,7 +88,9 @@ page_header(
 # =============================================================================
 # TABS FOR DIFFERENT ANALYSES
 # =============================================================================
-tab_basic, tab_option = st.tabs(["📊 Basic Risk Metrics", "📈 Option Position Risk"])
+tab_basic, tab_option, tab_stress, tab_arb = st.tabs(
+    ["Basic Risk Metrics", "Option Position Risk", "Stress Test", "Arbitrage Check"]
+)
 
 # =============================================================================
 # TAB 1: BASIC RISK
@@ -341,4 +343,243 @@ with tab_option:
         )
         fig.update_layout(**get_chart_layout("Option P&L Distribution", 400))
         fig.update_xaxes(title_text="P&L ($)")
+        st.plotly_chart(fig, use_container_width=True)
+
+# =============================================================================
+# TAB 3: STRESS TEST
+# =============================================================================
+with tab_stress:
+    st.markdown('<div class="input-section">', unsafe_allow_html=True)
+
+    col1, col2, col3, col4 = st.columns([1.2, 1.2, 1.2, 0.8])
+
+    with col1:
+        st.markdown("**Portfolio**")
+        port_value = st.number_input(
+            "Portfolio Value ($)", value=1000000, step=10000, key="s_val"
+        )
+        port_beta = st.number_input("Beta", value=1.0, step=0.1, key="s_beta")
+
+    with col2:
+        st.markdown("**Stress Scenario**")
+        scenario = st.selectbox(
+            "Scenario",
+            [
+                "2008 Financial Crisis (-50%)",
+                "COVID Crash Mar 2020 (-34%)",
+                "Black Monday 1987 (-22%)",
+                "Tech Crash 2022 (-28%)",
+                "Custom",
+            ],
+            key="s_scenario",
+        )
+
+    with col3:
+        st.markdown("**Custom Shock**")
+        custom_shock = st.number_input(
+            "Equity Shock (%)", value=-20.0, step=5.0, key="s_custom"
+        )
+        vol_shock = st.number_input("Vol Shock (%)", value=50.0, step=10.0, key="s_vol")
+
+    with col4:
+        st.markdown("**Run**")
+        st.write("")
+        run_stress = st.button(
+            "Stress Test", type="primary", use_container_width=True, key="s_run"
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if run_stress:
+        section_divider()
+
+        # Define shocks
+        shocks = {
+            "2008 Financial Crisis (-50%)": -0.50,
+            "COVID Crash Mar 2020 (-34%)": -0.34,
+            "Black Monday 1987 (-22%)": -0.22,
+            "Tech Crash 2022 (-28%)": -0.28,
+            "Custom": custom_shock / 100,
+        }
+
+        shock = shocks[scenario]
+        portfolio_loss = port_value * shock * port_beta
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1:
+            st.markdown(
+                f"""<div class="metric-card"><div class="metric-label">Scenario</div><div class="metric-value" style="font-size: 1rem;">{scenario.split("(")[0]}</div></div>""",
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f"""<div class="metric-card"><div class="metric-label">Market Shock</div><div class="metric-value" style="color: #ef4444;">{shock:.0%}</div></div>""",
+                unsafe_allow_html=True,
+            )
+        with c3:
+            st.markdown(
+                f"""<div class="metric-card"><div class="metric-label">Portfolio Impact</div><div class="metric-value" style="color: #ef4444;">${portfolio_loss:,.0f}</div></div>""",
+                unsafe_allow_html=True,
+            )
+        with c4:
+            new_val = port_value + portfolio_loss
+            st.markdown(
+                f"""<div class="metric-card"><div class="metric-label">New Value</div><div class="metric-value">${new_val:,.0f}</div></div>""",
+                unsafe_allow_html=True,
+            )
+
+        section_divider()
+
+        # Sensitivity table
+        st.markdown("**Sensitivity Analysis**")
+        shocks_range = [-0.30, -0.20, -0.10, 0.0, 0.10, 0.20]
+        betas = [0.5, 0.75, 1.0, 1.25, 1.5]
+
+        results = []
+        for b in betas:
+            row = {"Beta": b}
+            for s in shocks_range:
+                row[f"{s:+.0%}"] = port_value * s * b
+            results.append(row)
+
+        df = pd.DataFrame(results)
+        st.dataframe(
+            df.style.format(
+                {"Beta": "{:.2f}"} | {c: "${:,.0f}" for c in df.columns if c != "Beta"}
+            ),
+            hide_index=True,
+        )
+
+# =============================================================================
+# TAB 4: ARBITRAGE CHECK
+# =============================================================================
+with tab_arb:
+    st.markdown('<div class="input-section">', unsafe_allow_html=True)
+
+    col1, col2, col3, col4 = st.columns([1.2, 1.2, 1.2, 0.8])
+
+    with col1:
+        st.markdown("**Butterfly Spread**")
+        K1 = st.number_input("Low Strike ($)", value=95.0, step=1.0, key="a_k1")
+        K2 = st.number_input("Mid Strike ($)", value=100.0, step=1.0, key="a_k2")
+        K3 = st.number_input("High Strike ($)", value=105.0, step=1.0, key="a_k3")
+
+    with col2:
+        st.markdown("**Option Prices**")
+        C1 = st.number_input("C(K1) Price ($)", value=8.0, step=0.5, key="a_c1")
+        C2 = st.number_input("C(K2) Price ($)", value=5.0, step=0.5, key="a_c2")
+        C3 = st.number_input("C(K3) Price ($)", value=2.5, step=0.5, key="a_c3")
+
+    with col3:
+        st.markdown("**Put Prices (Put-Call Parity)**")
+        spot = st.number_input("Spot ($)", value=100.0, step=1.0, key="a_spot")
+        r_pct = st.number_input("Rate (%)", value=5.0, step=0.5, key="a_r")
+        T = st.number_input("Time (yrs)", value=0.25, step=0.05, key="a_T")
+
+    with col4:
+        st.markdown("**Check**")
+        st.write("")
+        run_arb = st.button(
+            "Check Arbitrage", type="primary", use_container_width=True, key="a_run"
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if run_arb:
+        section_divider()
+
+        # Butterfly arbitrage: C(K1) - 2C(K2) + C(K3) >= 0 for convexity
+        butterfly = C1 - 2 * C2 + C3
+
+        # Put-Call parity: C - P = S - K*exp(-rT)
+        r = r_pct / 100
+        parity_k1 = C1 - (spot - K1 * np.exp(-r * T))
+        parity_k2 = C2 - (spot - K2 * np.exp(-r * T))
+        parity_k3 = C3 - (spot - K3 * np.exp(-r * T))
+
+        # Calendar spread: For same strike, longer dated should be worth more
+
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            color = "#10b981" if butterfly >= 0 else "#ef4444"
+            status = "PASSED" if butterfly >= 0 else "VIOLATION"
+            st.markdown(
+                f"""
+            <div class="metric-card">
+                <div class="metric-label">Butterfly Convexity</div>
+                <div class="metric-value" style="color: {color};">{status}</div>
+                <div class="metric-delta">C(K1) - 2C(K2) + C(K3) = ${butterfly:.2f}</div>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+        with c2:
+            st.markdown(
+                f"""
+            <div class="metric-card">
+                <div class="metric-label">Implied Put (K2)</div>
+                <div class="metric-value">${parity_k2:.2f}</div>
+                <div class="metric-delta">via Put-Call Parity</div>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+        with c3:
+            spread = K2 - K1
+            max_payoff = spread
+            cost = C1 - 2 * C2 + C3
+            profit = max_payoff - cost if cost > 0 else 0
+            st.markdown(
+                f"""
+            <div class="metric-card">
+                <div class="metric-label">Butterfly P&L</div>
+                <div class="metric-value">${profit:.2f}</div>
+                <div class="metric-delta">Max at K2=${K2:.0f}</div>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+        section_divider()
+
+        # Payoff diagram
+        spot_range = np.linspace(K1 - 10, K3 + 10, 100)
+
+        # Long butterfly: +1 C(K1), -2 C(K2), +1 C(K3)
+        payoff_k1 = np.maximum(spot_range - K1, 0)
+        payoff_k2 = np.maximum(spot_range - K2, 0)
+        payoff_k3 = np.maximum(spot_range - K3, 0)
+
+        butterfly_payoff = payoff_k1 - 2 * payoff_k2 + payoff_k3 - (C1 - 2 * C2 + C3)
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=spot_range,
+                y=butterfly_payoff,
+                mode="lines",
+                name="Butterfly P&L",
+                line=dict(color="#a78bfa", width=3),
+                fill="tozeroy",
+                fillcolor="rgba(167, 139, 250, 0.2)",
+            )
+        )
+        fig.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+        fig.add_vline(
+            x=K1, line_dash="dot", line_color="#60a5fa", annotation_text=f"K1=${K1}"
+        )
+        fig.add_vline(
+            x=K2, line_dash="dot", line_color="#10b981", annotation_text=f"K2=${K2}"
+        )
+        fig.add_vline(
+            x=K3, line_dash="dot", line_color="#f59e0b", annotation_text=f"K3=${K3}"
+        )
+
+        fig.update_layout(**get_chart_layout("Butterfly Spread Payoff", 400))
+        fig.update_xaxes(title_text="Spot at Expiry ($)")
+        fig.update_yaxes(title_text="P&L ($)")
         st.plotly_chart(fig, use_container_width=True)

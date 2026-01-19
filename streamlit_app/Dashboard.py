@@ -17,7 +17,7 @@ import streamlit as st
 
 # Page config - must be first Streamlit command
 st.set_page_config(
-    page_title="OptionsLab",
+    page_title="Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -36,7 +36,7 @@ apply_custom_css()
 # MAIN CONTENT
 # =============================================================================
 
-page_header("OptionsLab", "Advanced Options Pricing, Greeks & Risk Analytics")
+page_header("Dashboard", "Advanced Options Pricing, Greeks & Risk Analytics")
 
 # Overview metrics
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -172,24 +172,62 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Page links
+# Page links - Row 1
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    if st.button("📈 Monte Carlo Basic", use_container_width=True):
+    if st.button("Monte Carlo Basic", use_container_width=True):
         st.switch_page("pages/1_MonteCarlo_Basic.py")
 
 with col2:
-    if st.button("🧠 Monte Carlo ML", use_container_width=True):
+    if st.button("Monte Carlo ML", use_container_width=True):
         st.switch_page("pages/2_MonteCarlo_ML.py")
 
 with col3:
-    if st.button("⚡ Monte Carlo Unified", use_container_width=True):
+    if st.button("Monte Carlo Unified", use_container_width=True):
         st.switch_page("pages/3_MonteCarlo_Unified.py")
 
 with col4:
-    if st.button("🌳 Binomial Tree", use_container_width=True):
+    if st.button("Binomial Tree", use_container_width=True):
         st.switch_page("pages/4_Binomial_Tree.py")
+
+# Page links - Row 2 (New pages)
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    if st.button("Advanced Models", use_container_width=True):
+        st.switch_page("pages/6_Advanced_Models.py")
+
+with col2:
+    if st.button("Exotic Options", use_container_width=True):
+        st.switch_page("pages/7_Exotic_Options.py")
+
+with col3:
+    if st.button("Portfolio Greeks", use_container_width=True):
+        st.switch_page("pages/8_Portfolio_Greeks.py")
+
+with col4:
+    if st.button("Risk Analysis", use_container_width=True):
+        st.switch_page("pages/12_Risk_Analysis.py")
+
+# Page links - Row 3 (Advanced features)
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    if st.button("Live Market", use_container_width=True):
+        st.switch_page("pages/9_Live_Market.py")
+
+with col2:
+    if st.button("Backtest", use_container_width=True):
+        st.switch_page("pages/10_Backtest.py")
+
+with col3:
+    if st.button("Volatility Surface", use_container_width=True):
+        st.switch_page("pages/13_Volatility_Surface.py")
+
+with col4:
+    if st.button("Benchmarks", use_container_width=True):
+        st.switch_page("pages/11_Benchmarks.py")
 
 section_divider()
 
