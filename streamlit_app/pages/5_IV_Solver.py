@@ -8,6 +8,13 @@ Features:
 - Build and visualize IV surfaces
 """
 
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from datetime import datetime
 
 import numpy as np
@@ -20,14 +27,32 @@ import streamlit as st
 # PAGE CONFIG
 # ============================================================================
 st.set_page_config(
-    page_title="IV Solver & Market Data",
-    page_icon="📈",
+    page_title="IV Solver",
+    page_icon="",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # ============================================================================
 # IMPORTS
 # ============================================================================
+try:
+    from components import (
+        apply_custom_css,
+        format_price,
+        get_chart_layout,
+        page_header,
+        section_divider,
+    )
+except ImportError:
+    from streamlit_app.components import (
+        apply_custom_css,
+        format_price,
+        get_chart_layout,
+        page_header,
+        section_divider,
+    )
+
 try:
     from src.pricing_models.iv_solver import (
         black_scholes_price,
@@ -51,33 +76,19 @@ try:
 except ImportError:
     MARKET_DATA_AVAILABLE = False
 
+apply_custom_css()
+
 # ============================================================================
 # HEADER
 # ============================================================================
-st.title("📈 Implied Volatility Solver & Market Data")
-st.markdown("Compute implied volatility from option prices and fetch real market data.")
+page_header("IV Solver", "Compute implied volatility from option prices")
 
-# Feature badges
-col1, col2, col3 = st.columns(3)
-with col1:
-    if IV_SOLVER_AVAILABLE:
-        st.success("✅ IV Solver Available")
-    else:
-        st.error("❌ IV Solver Not Available")
-with col2:
-    if MARKET_DATA_AVAILABLE:
-        st.success("✅ Yahoo Finance Available")
-    else:
-        st.warning("⚠️ yfinance not installed")
-with col3:
-    st.info("📊 Real-time Data")
-
-st.divider()
+section_divider()
 
 # ============================================================================
 # TABS
 # ============================================================================
-tab1, tab2, tab3 = st.tabs(["🧮 IV Calculator", "📊 Market Data", "🌊 IV Surface"])
+tab1, tab2, tab3 = st.tabs(["IV Calculator", "Market Data", "IV Surface"])
 
 # ============================================================================
 # TAB 1: IV CALCULATOR

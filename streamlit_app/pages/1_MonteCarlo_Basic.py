@@ -48,6 +48,7 @@ except ImportError:
     )
 
 try:
+    from src.greeks import compute_greeks_unified
     from src.pricing_models import (
         GPU_AVAILABLE,
         NUMBA_AVAILABLE,
@@ -57,6 +58,7 @@ try:
 except ImportError:
     MonteCarloPricer = None
     black_scholes = None
+    compute_greeks_unified = None
     NUMBA_AVAILABLE = False
     GPU_AVAILABLE = False
 
@@ -105,43 +107,18 @@ with col3:
     sigma = sigma_pct / 100.0
 
 with col4:
-    st.markdown("**Simulation & Acceleration**")
-    # Better slider with 10k increments
+    st.markdown("**Simulation Settings**")
     num_sims = st.select_slider(
         "Simulations",
-        options=[
-            10000,
-            20000,
-            30000,
-            40000,
-            50000,
-            75000,
-            100000,
-            150000,
-            200000,
-            250000,
-        ],
+        options=[10000, 25000, 50000, 100000, 200000],
         value=50000,
     )
     num_steps = st.select_slider(
-        "Time Steps", options=[25, 50, 100, 200, 500], value=100
+        "Time Steps",
+        options=[1, 10, 25, 50, 100],
+        value=1,
+        help="Use 1 for fastest European option pricing",
     )
-
-    accel_col1, accel_col2 = st.columns(2)
-    with accel_col1:
-        use_numba = st.checkbox(
-            "Numba JIT",
-            value=NUMBA_AVAILABLE,
-            disabled=not NUMBA_AVAILABLE,
-            help="Enable Numba JIT for faster CPU execution",
-        )
-    with accel_col2:
-        use_gpu = st.checkbox(
-            "GPU",
-            value=False,
-            disabled=not GPU_AVAILABLE,
-            help="Enable GPU acceleration via CuPy",
-        )
 
 with col5:
     st.markdown("**Run**")
@@ -158,14 +135,11 @@ if run:
         st.error("Monte Carlo pricer not available. Check installation.")
         st.stop()
 
-    backend_name = "GPU" if use_gpu else ("Numba" if use_numba else "NumPy")
-
-    with st.spinner(f"Running MC simulation ({backend_name})..."):
+    with st.spinner("Running MC simulation..."):
         pricer = MonteCarloPricer(
             num_simulations=num_sims,
             num_steps=num_steps,
             seed=seed,
-            use_numba=use_numba,
         )
 
         # Time pricing
@@ -173,15 +147,20 @@ if run:
         mc_price = pricer.price(S, K, T, r, sigma, option_type)
         t_price = (time.perf_counter() - t_start) * 1000
 
-        # Time Greeks
+        # Time Greeks using unified interface
         t_start = time.perf_counter()
-        delta, gamma = pricer.delta_gamma(S, K, T, r, sigma, option_type)
-        vega = pricer.vega(S, K, T, r, sigma, option_type)
-        theta = pricer.theta(S, K, T, r, sigma, option_type)
-        rho = pricer.rho(S, K, T, r, sigma, option_type)
+        greeks = compute_greeks_unified(
+            pricer, S, K, T, r, sigma, option_type, include_second_order=False
+        )
+        delta = greeks["delta"]
+        gamma = greeks["gamma"]
+        vega = greeks["vega"]
+        theta = greeks["theta"]
+        rho = greeks["rho"]
         t_greeks = (time.perf_counter() - t_start) * 1000
 
         t_total = t_price + t_greeks
+        backend_name = "NumPy"  # Default backend
         bs_price = (
             black_scholes(S, K, T, r, sigma, option_type) if black_scholes else None
         )
