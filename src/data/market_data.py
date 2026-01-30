@@ -72,15 +72,15 @@ _max_backoff = 60  # Max 60 seconds backoff
 
 def _rate_limit():
     """Ensure minimum time between API requests with adaptive backoff."""
-    global _last_request_time, _consecutive_errors
+    global _last_request_time
     now = time.time()
-    
+
     # Calculate delay with exponential backoff for errors
     base_delay = _min_request_interval
     if _consecutive_errors > 0:
-        backoff = min(base_delay * (2 ** _consecutive_errors), _max_backoff)
+        backoff = min(base_delay * (2**_consecutive_errors), _max_backoff)
         base_delay = backoff
-    
+
     elapsed = now - _last_request_time
     if elapsed < base_delay:
         time.sleep(base_delay - elapsed)
@@ -102,13 +102,13 @@ def _request_failed():
 def safe_yfinance_call(func, *args, max_retries: int = 3, **kwargs):
     """
     Wrapper for yfinance calls with retry logic and rate limiting.
-    
+
     Args:
         func: The yfinance function to call
         *args: Arguments to pass to the function
         max_retries: Maximum number of retry attempts
         **kwargs: Keyword arguments to pass to the function
-        
+
     Returns:
         Result of the function call, or None if all retries failed
     """
@@ -121,10 +121,10 @@ def safe_yfinance_call(func, *args, max_retries: int = 3, **kwargs):
         except Exception as e:
             _request_failed()
             error_msg = str(e).lower()
-            
+
             # Check for rate limiting indicators
             if "429" in error_msg or "rate" in error_msg or "limit" in error_msg:
-                wait_time = min(5 * (2 ** attempt), 60)
+                wait_time = min(5 * (2**attempt), 60)
                 time.sleep(wait_time)
             elif attempt < max_retries - 1:
                 time.sleep(1)

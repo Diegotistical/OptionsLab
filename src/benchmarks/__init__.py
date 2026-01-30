@@ -4,11 +4,11 @@ Benchmarking framework for volatility surface models.
 """
 
 from src.benchmarks.vol_surface_benchmark import (
-    VolSurfaceBenchmark,
     BenchmarkResults,
     ErrorMetrics,
     SpeedMetrics,
     StabilityMetrics,
+    VolSurfaceBenchmark,
 )
 
 __all__ = [

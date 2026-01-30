@@ -26,10 +26,10 @@ Usage:
     >>> predictions = model.predict_volatility(test_data)
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 import time
 import warnings
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -41,13 +41,14 @@ try:
     from torch.utils.data import DataLoader, TensorDataset
 
     TORCH_AVAILABLE = True
-    
+
     # AMD GPU Support: Try DirectML first (Windows AMD), then CUDA, then CPU
     def get_best_device():
         """Get the best available device with AMD GPU support."""
         # Try DirectML for AMD GPUs on Windows
         try:
             import torch_directml
+
             dml_device = torch_directml.device()
             # Test if it works
             test_tensor = torch.zeros(1, device=dml_device)
@@ -55,23 +56,23 @@ try:
             return dml_device, "AMD (DirectML)"
         except Exception:
             pass
-        
+
         # Try CUDA (NVIDIA)
         if torch.cuda.is_available():
             return torch.device("cuda"), "NVIDIA (CUDA)"
-        
+
         # Try ROCm (AMD on Linux)
         try:
-            if hasattr(torch, 'hip') and torch.hip.is_available():
+            if hasattr(torch, "hip") and torch.hip.is_available():
                 return torch.device("cuda"), "AMD (ROCm/HIP)"
         except Exception:
             pass
-        
+
         # Fallback to CPU
         return torch.device("cpu"), "CPU"
-    
+
     BEST_DEVICE, DEVICE_NAME = get_best_device()
-    
+
 except ImportError:
     TORCH_AVAILABLE = False
     torch = None
@@ -79,7 +80,6 @@ except ImportError:
     DEVICE_NAME = "N/A"
 
 from src.volatility_surface.base import VolatilityModelBase
-
 
 # =============================================================================
 # Arbitrage Constraint Functions
@@ -433,7 +433,9 @@ if TORCH_AVAILABLE:
             # Soft penalty
             excess = torch.relu(sigma - max_sigma - 0.1)
 
-            return excess[wing_mask].mean() if wing_mask.sum() > 0 else torch.tensor(0.0)
+            return (
+                excess[wing_mask].mean() if wing_mask.sum() > 0 else torch.tensor(0.0)
+            )
 
 
 # =============================================================================
@@ -477,7 +479,9 @@ class PINNVolatilityModel(VolatilityModelBase):
         if feature_columns is None:
             feature_columns = ["log_moneyness", "T"]
 
-        super().__init__(feature_columns=feature_columns, enable_benchmark=enable_benchmark)
+        super().__init__(
+            feature_columns=feature_columns, enable_benchmark=enable_benchmark
+        )
 
         self.hidden_layers = hidden_layers or [64, 64, 32]
         self.lambda_calendar = lambda_calendar
@@ -565,7 +569,13 @@ class PINNVolatilityModel(VolatilityModelBase):
 
         for epoch in range(self.epochs):
             self.model.train()
-            epoch_losses = {"mse": 0, "calendar": 0, "butterfly": 0, "wing": 0, "total": 0}
+            epoch_losses = {
+                "mse": 0,
+                "calendar": 0,
+                "butterfly": 0,
+                "wing": 0,
+                "total": 0,
+            }
 
             for batch_X, batch_w in loader:
                 self.optimizer.zero_grad()
