@@ -21,7 +21,9 @@ from src.pricing_models.monte_carlo_ml import LIGHTGBM_AVAILABLE, MonteCarloMLSu
 from src.pricing_models.monte_carlo_unified import (
     GPU_AVAILABLE,
 )
-from src.pricing_models.monte_carlo_unified import InputValidationError as UniInputValidationError
+from src.pricing_models.monte_carlo_unified import (
+    InputValidationError as UniInputValidationError,
+)
 from src.pricing_models.monte_carlo_unified import (
     MLSurrogate,
     MonteCarloPricerUni,
@@ -157,13 +159,13 @@ class TestMonteCarloPricer:
 
     def test_price_with_std_error(self, basic_pricer):
         """Test price with standard error calculation."""
-        result = basic_pricer.price(
-            100, 100, 1.0, 0.05, 0.2, "call", return_error=True
-        )
+        result = basic_pricer.price(100, 100, 1.0, 0.05, 0.2, "call", return_error=True)
 
         assert result.price > 0
         assert result.std_error > 0
-        assert result.std_error < result.price  # Std error should be small relative to price
+        assert (
+            result.std_error < result.price
+        )  # Std error should be small relative to price
 
     def test_delta_call(self, basic_pricer):
         """Test delta calculation for call option."""

@@ -13,15 +13,13 @@ Usage:
     >>> surface = dataset.to_model_input()
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Union
-import warnings
+from typing import List, Literal, Optional, Union
 
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-
 
 # =============================================================================
 # Data Container
@@ -105,7 +103,11 @@ class OptionChainDataset:
 
     @property
     def strikes(self) -> np.ndarray:
-        return self.data["strike"].unique() if "strike" in self.data.columns else np.array([])
+        return (
+            self.data["strike"].unique()
+            if "strike" in self.data.columns
+            else np.array([])
+        )
 
     def filter_liquid(
         self,
@@ -214,15 +216,13 @@ class OptionChainDataset:
             d2 = d1 - sigma * np.sqrt(T)
 
             if option_type == "call":
-                bs_price = (
-                    S * np.exp(-q * T) * norm.cdf(d1)
-                    - K * np.exp(-r * T) * norm.cdf(d2)
-                )
+                bs_price = S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(
+                    -r * T
+                ) * norm.cdf(d2)
             else:
-                bs_price = (
-                    K * np.exp(-r * T) * norm.cdf(-d2)
-                    - S * np.exp(-q * T) * norm.cdf(-d1)
-                )
+                bs_price = K * np.exp(-r * T) * norm.cdf(-d2) - S * np.exp(
+                    -q * T
+                ) * norm.cdf(-d1)
 
             vega = S * np.exp(-q * T) * norm.pdf(d1) * np.sqrt(T)
 
@@ -283,7 +283,9 @@ class OptionChainDataset:
         df = self.compute_log_moneyness()
 
         if "implied_vol" not in df.columns:
-            raise ValueError("No implied_vol column. Run compute_iv_from_prices() first.")
+            raise ValueError(
+                "No implied_vol column. Run compute_iv_from_prices() first."
+            )
 
         result = df[["log_moneyness", "T", "implied_vol"]].copy()
         result = result.rename(columns={"implied_vol": "implied_volatility"})
@@ -436,44 +438,43 @@ class OptionChainLoader:
     ) -> OptionChainDataset:
         """
         Load option chain from Yahoo Finance with rate limit handling.
-        
+
         Uses exponential backoff and caching to avoid rate limits.
-        
+
         Args:
             ticker: Stock symbol (e.g., 'SPY', 'AAPL', 'AMD')
             n_expiries: Number of expiration dates to fetch
             use_cache: Use cached data if available
-            
+
         Returns:
             OptionChainDataset with live market data
         """
         try:
             from src.data.market_data import (
+                YFINANCE_AVAILABLE,
+                get_expiries,
                 get_options_chain,
                 get_stock_price,
-                get_expiries,
-                safe_yfinance_call,
-                YFINANCE_AVAILABLE,
             )
         except ImportError:
             raise ImportError("market_data module required for yfinance loading")
-        
+
         if not YFINANCE_AVAILABLE:
             raise ImportError("yfinance not installed. Run: pip install yfinance")
-        
+
         # Get spot price with retry
         spot_data = get_stock_price(ticker, use_cache=use_cache)
         spot = spot_data.get("price", 100.0)
-        
+
         if spot <= 0:
             raise ValueError(f"Could not get spot price for {ticker}")
-        
+
         # Get expiries
         expiries = get_expiries(ticker)[:n_expiries]
-        
+
         if not expiries:
             raise ValueError(f"No options available for {ticker}")
-        
+
         # Fetch chains for each expiry
         all_data = []
         for exp in expiries:
@@ -484,20 +485,20 @@ class OptionChainLoader:
             except Exception as e:
                 print(f"Warning: Failed to fetch {ticker} {exp}: {e}")
                 continue
-        
+
         if not all_data:
             raise ValueError(f"Could not fetch any option data for {ticker}")
-        
+
         df = pd.concat(all_data, ignore_index=True)
-        
+
         # Filter valid IV
         df = df[df["implied_vol"] > 0.01]
         df = df[df["implied_vol"] < 3.0]
-        
+
         # Add T column from dte
         if "dte" in df.columns:
             df["T"] = df["dte"] / 365.0
-        
+
         return OptionChainDataset(
             data=df,
             underlying_price=spot,

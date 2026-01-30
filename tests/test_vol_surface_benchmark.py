@@ -3,8 +3,8 @@
 Unit tests for volatility surface benchmark framework.
 """
 
-import sys
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -14,18 +14,17 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.benchmarks.vol_surface_benchmark import (
+    BenchmarkResults,
     ErrorMetrics,
+    ModelBenchmark,
+    SABRWrapper,
     SpeedMetrics,
     StabilityMetrics,
-    ModelBenchmark,
-    BenchmarkResults,
-    VolSurfaceBenchmark,
     SVIWrapper,
-    SABRWrapper,
+    VolSurfaceBenchmark,
     generate_synthetic_smile,
     generate_synthetic_surface,
 )
-
 
 # =============================================================================
 # Test Metrics Dataclasses
@@ -163,7 +162,7 @@ class TestSyntheticData:
 
     def test_generate_smile(self):
         df = generate_synthetic_smile(n_strikes=30, T=0.5, seed=42)
-        
+
         assert len(df) == 30
         assert "log_moneyness" in df.columns
         assert "T" in df.columns
@@ -182,7 +181,7 @@ class TestSyntheticData:
             maturities=[0.25, 0.5, 1.0],
             seed=42,
         )
-        
+
         assert len(df) == 60  # 20 strikes × 3 maturities
         assert df["T"].nunique() == 3
         assert set(df["T"].unique()) == {0.25, 0.5, 1.0}
@@ -197,13 +196,13 @@ class TestSyntheticData:
             noise=0.0,  # No noise for deterministic test
             seed=42,
         )
-        
+
         atm_mask = np.abs(df["log_moneyness"]) < 0.05
         wing_mask = np.abs(df["log_moneyness"]) > 0.2
-        
+
         atm_vol = df.loc[atm_mask, "implied_volatility"].mean()
         wing_vol = df.loc[wing_mask, "implied_volatility"].mean()
-        
+
         # Wings should have higher vol due to smile
         assert wing_vol > atm_vol
 
@@ -218,13 +217,13 @@ class TestSVIWrapper:
 
     def test_calibration(self):
         wrapper = SVIWrapper()
-        
+
         # Generate simple smile data
         log_strikes = np.linspace(-0.3, 0.3, 20)
         market_vols = 0.2 + 0.05 * log_strikes**2
-        
+
         wrapper.calibrate(log_strikes, market_vols, T=1.0)
-        
+
         # Should be able to predict after calibration
         pred = wrapper.predict(log_strikes, T=1.0)
         assert len(pred) == 20
@@ -234,10 +233,10 @@ class TestSVIWrapper:
         wrapper = SVIWrapper()
         log_strikes = np.linspace(-0.3, 0.3, 20)
         market_vols = 0.2 + 0.05 * log_strikes**2
-        
+
         wrapper.calibrate(log_strikes, market_vols, T=1.0)
         params = wrapper.get_params()
-        
+
         assert "a" in params
         assert "b" in params
         assert "rho" in params
@@ -250,12 +249,12 @@ class TestSABRWrapper:
 
     def test_calibration(self):
         wrapper = SABRWrapper(beta=0.5)
-        
+
         log_strikes = np.linspace(-0.2, 0.2, 15)
         market_vols = 0.2 - 0.1 * log_strikes + 0.03 * log_strikes**2
-        
+
         wrapper.calibrate(log_strikes, market_vols, T=0.5, F=100.0)
-        
+
         pred = wrapper.predict(log_strikes, T=0.5)
         assert len(pred) == 15
         assert np.all(pred > 0)
@@ -264,10 +263,10 @@ class TestSABRWrapper:
         wrapper = SABRWrapper()
         log_strikes = np.linspace(-0.2, 0.2, 15)
         market_vols = np.full_like(log_strikes, 0.2)
-        
+
         wrapper.calibrate(log_strikes, market_vols, T=1.0)
         params = wrapper.get_params()
-        
+
         assert "alpha" in params
         assert "beta" in params
         assert "rho" in params
@@ -299,13 +298,13 @@ class TestVolSurfaceBenchmark:
     def test_run_quick(self):
         """Quick smoke test with minimal data."""
         data = generate_synthetic_smile(n_strikes=30, T=1.0, seed=42)
-        
+
         benchmark = VolSurfaceBenchmark(
             models=["svi"],
             verbose=False,
         )
         results = benchmark.run(data, n_trials=1, test_size=0.2)
-        
+
         assert len(results.models) == 1
         assert results.models[0].model_name == "SVI"
         assert results.models[0].error.rmse >= 0
@@ -314,13 +313,13 @@ class TestVolSurfaceBenchmark:
     def test_run_full(self):
         """Full benchmark with multiple models (marked slow)."""
         data = generate_synthetic_surface(n_strikes=30, seed=42)
-        
+
         benchmark = VolSurfaceBenchmark(
             models=["svi", "sabr"],
             verbose=False,
         )
         results = benchmark.run(data, n_trials=3, test_size=0.2)
-        
+
         assert len(results.models) == 2
         df = results.to_dataframe()
         assert "SVI" in df.index
@@ -329,10 +328,10 @@ class TestVolSurfaceBenchmark:
     def test_results_dataframe(self):
         """Test that results convert to DataFrame correctly."""
         data = generate_synthetic_smile(n_strikes=30, T=1.0, seed=42)
-        
+
         benchmark = VolSurfaceBenchmark(models=["svi"], verbose=False)
         results = benchmark.run(data, n_trials=1)
-        
+
         df = results.to_dataframe()
         assert isinstance(df, pd.DataFrame)
         assert "RMSE" in df.columns
@@ -355,18 +354,18 @@ class TestIntegration:
             maturities=[0.25, 0.5],
             seed=42,
         )
-        
+
         # Run benchmark
         benchmark = VolSurfaceBenchmark(
             models=["svi"],
             verbose=False,
         )
         results = benchmark.run(data, n_trials=2, test_size=0.3)
-        
+
         # Verify results
         assert results.n_trials == 2
         assert results.dataset_info["n_samples"] == 50
-        
+
         df = results.to_dataframe()
         assert df.loc["SVI", "RMSE"] < 1.0  # Reasonable error bound
 

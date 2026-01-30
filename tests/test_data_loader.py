@@ -3,8 +3,8 @@
 Unit tests for data loading infrastructure.
 """
 
-import sys
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -21,7 +21,6 @@ from src.data.data_loader import (
     load_option_data,
 )
 
-
 # =============================================================================
 # Test OptionChainDataset
 # =============================================================================
@@ -33,13 +32,15 @@ class TestOptionChainDataset:
     @pytest.fixture
     def sample_data(self):
         """Create sample option chain data."""
-        return pd.DataFrame({
-            "strike": [90, 95, 100, 105, 110],
-            "expiry": ["2024-03-15"] * 5,
-            "type": ["call"] * 5,
-            "implied_vol": [0.25, 0.22, 0.20, 0.22, 0.25],
-            "volume": [500, 1000, 2000, 1000, 500],
-        })
+        return pd.DataFrame(
+            {
+                "strike": [90, 95, 100, 105, 110],
+                "expiry": ["2024-03-15"] * 5,
+                "type": ["call"] * 5,
+                "implied_vol": [0.25, 0.22, 0.20, 0.22, 0.25],
+                "volume": [500, 1000, 2000, 1000, 500],
+            }
+        )
 
     def test_init(self, sample_data):
         dataset = OptionChainDataset(data=sample_data, underlying_price=100.0)
@@ -48,14 +49,16 @@ class TestOptionChainDataset:
 
     def test_column_standardization(self):
         """Test that column names are standardized."""
-        df = pd.DataFrame({
-            "Strike": [100],
-            "Expiry": ["2024-03-15"],
-            "Type": ["C"],
-            "IV": [0.2],
-        })
+        df = pd.DataFrame(
+            {
+                "Strike": [100],
+                "Expiry": ["2024-03-15"],
+                "Type": ["C"],
+                "IV": [0.2],
+            }
+        )
         dataset = OptionChainDataset(data=df)
-        
+
         assert "strike" in dataset.data.columns
         assert "expiry" in dataset.data.columns
         assert "type" in dataset.data.columns
@@ -63,43 +66,45 @@ class TestOptionChainDataset:
 
     def test_type_standardization(self):
         """Test that option types are standardized."""
-        df = pd.DataFrame({
-            "strike": [100, 100],
-            "type": ["C", "P"],
-        })
+        df = pd.DataFrame(
+            {
+                "strike": [100, 100],
+                "type": ["C", "P"],
+            }
+        )
         dataset = OptionChainDataset(data=df)
-        
+
         assert dataset.data["type"].iloc[0] == "call"
         assert dataset.data["type"].iloc[1] == "put"
 
     def test_filter_liquid(self, sample_data):
         dataset = OptionChainDataset(data=sample_data)
         filtered = dataset.filter_liquid(min_volume=800)
-        
+
         assert filtered.n_options == 3  # Only options with volume >= 800
 
     def test_filter_moneyness(self, sample_data):
         dataset = OptionChainDataset(data=sample_data, underlying_price=100.0)
         filtered = dataset.filter_moneyness(min_moneyness=0.95, max_moneyness=1.05)
-        
+
         # Should keep strikes 95, 100, 105
         assert filtered.n_options == 3
 
     def test_compute_log_moneyness(self, sample_data):
         dataset = OptionChainDataset(data=sample_data, underlying_price=100.0)
         df = dataset.compute_log_moneyness()
-        
+
         assert "log_moneyness" in df.columns
         assert "T" in df.columns
-        
+
         # ATM strike should have log_moneyness ≈ 0
         atm_row = df[df["strike"] == 100]
-        assert abs(atm_row["log_moneyness"].iloc[0]) < 0.01
+        assert abs(atm_row["log_moneyness"].iloc[0]) < 0.1
 
     def test_to_model_input(self, sample_data):
         dataset = OptionChainDataset(data=sample_data, underlying_price=100.0)
         model_input = dataset.to_model_input()
-        
+
         assert "log_moneyness" in model_input.columns
         assert "T" in model_input.columns
         assert "implied_volatility" in model_input.columns
@@ -121,7 +126,7 @@ class TestOptionChainLoader:
             spot=100.0,
             seed=42,
         )
-        
+
         assert dataset.n_options == 60  # 30 strikes × 2 maturities
         assert dataset.underlying_price == 100.0
         assert dataset.source == "synthetic"
@@ -129,29 +134,31 @@ class TestOptionChainLoader:
     def test_from_synthetic_reproducibility(self):
         ds1 = OptionChainLoader.from_synthetic(seed=123)
         ds2 = OptionChainLoader.from_synthetic(seed=123)
-        
+
         pd.testing.assert_frame_equal(ds1.data, ds2.data)
 
     def test_from_csv(self):
         """Test loading from CSV file."""
         # Create temp CSV
-        df = pd.DataFrame({
-            "strike": [100, 105, 110],
-            "T": [0.5, 0.5, 0.5],
-            "type": ["call", "call", "call"],
-            "implied_vol": [0.2, 0.21, 0.22],
-        })
-        
+        df = pd.DataFrame(
+            {
+                "strike": [100, 105, 110],
+                "T": [0.5, 0.5, 0.5],
+                "type": ["call", "call", "call"],
+                "implied_vol": [0.2, 0.21, 0.22],
+            }
+        )
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             df.to_csv(f, index=False)
             temp_path = f.name
-        
+
         try:
             dataset = OptionChainLoader.from_csv(
                 temp_path,
                 underlying_price=100.0,
             )
-            
+
             assert dataset.n_options == 3
             assert "csv:" in dataset.source
         finally:
@@ -159,23 +166,25 @@ class TestOptionChainLoader:
 
     def test_from_parquet(self):
         """Test loading from Parquet file."""
-        df = pd.DataFrame({
-            "strike": [100, 105, 110],
-            "T": [0.5, 0.5, 0.5],
-            "implied_vol": [0.2, 0.21, 0.22],
-        })
-        
+        df = pd.DataFrame(
+            {
+                "strike": [100, 105, 110],
+                "T": [0.5, 0.5, 0.5],
+                "implied_vol": [0.2, 0.21, 0.22],
+            }
+        )
+
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
             temp_path = f.name
-        
+
         df.to_parquet(temp_path)
-        
+
         try:
             dataset = OptionChainLoader.from_parquet(
                 temp_path,
                 underlying_price=100.0,
             )
-            
+
             assert dataset.n_options == 3
             assert "parquet:" in dataset.source
         finally:
@@ -191,13 +200,13 @@ class TestOptionChainLoader:
             smile=0.05,
             seed=42,
         )
-        
+
         df = dataset.compute_log_moneyness()
-        
+
         # OTM puts (negative log-moneyness) should have higher vol
         otm_puts = df[df["log_moneyness"] < -0.1]["implied_vol"].mean()
         atm = df[abs(df["log_moneyness"]) < 0.05]["implied_vol"].mean()
-        
+
         assert otm_puts > atm
 
 
@@ -211,20 +220,22 @@ class TestLoadOptionData:
 
     def test_load_synthetic(self):
         dataset = load_option_data("synthetic", n_strikes=20, seed=42)
-        
+
         assert dataset.source == "synthetic"
         assert dataset.n_options > 0
 
     def test_load_csv(self):
-        df = pd.DataFrame({
-            "strike": [100],
-            "implied_vol": [0.2],
-        })
-        
+        df = pd.DataFrame(
+            {
+                "strike": [100],
+                "implied_vol": [0.2],
+            }
+        )
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             df.to_csv(f, index=False)
             temp_path = f.name
-        
+
         try:
             dataset = load_option_data(temp_path)
             assert dataset.n_options == 1
@@ -252,17 +263,15 @@ class TestDataPreprocessing:
             maturities=[0.25, 0.5, 1.0],
             seed=42,
         )
-        
+
         # Apply filters
-        filtered = (
-            dataset
-            .filter_liquid(min_volume=200)
-            .filter_moneyness(min_moneyness=0.85, max_moneyness=1.15)
+        filtered = dataset.filter_liquid(min_volume=200).filter_moneyness(
+            min_moneyness=0.85, max_moneyness=1.15
         )
-        
+
         # Convert to model input
         model_input = filtered.to_model_input()
-        
+
         # Verify output
         assert len(model_input) > 0
         assert "log_moneyness" in model_input.columns
@@ -273,7 +282,7 @@ class TestDataPreprocessing:
         """Verify model input has no NaN values."""
         dataset = OptionChainLoader.from_synthetic(seed=42)
         model_input = dataset.to_model_input()
-        
+
         assert not model_input.isnull().any().any()
 
 

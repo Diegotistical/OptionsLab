@@ -14,15 +14,13 @@ Usage:
     >>> results.to_dataframe()
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 import time
 import warnings
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-
 
 # =============================================================================
 # Metrics Dataclasses
@@ -276,8 +274,8 @@ class MLPWrapper(ModelWrapper):
         # Train MLP
         self.model = MLPRegressor(
             hidden_layer_sizes=(64, 32),
-            activation='relu',
-            solver='adam',
+            activation="relu",
+            solver="adam",
             max_iter=500,
             random_state=42,
             early_stopping=True,
@@ -366,7 +364,7 @@ class PINNWrapper(ModelWrapper):
             import torch.nn as nn
         except ImportError:
             raise ImportError("PyTorch required for PINN model")
-        
+
         from sklearn.preprocessing import StandardScaler
 
         # Prepare features
@@ -389,6 +387,7 @@ class PINNWrapper(ModelWrapper):
                     nn.Linear(16, 1),
                     nn.Softplus(),  # Ensures positive volatility
                 )
+
             def forward(self, x):
                 return self.net(x) * 0.5  # Scale to reasonable vol range
 
@@ -414,11 +413,11 @@ class PINNWrapper(ModelWrapper):
         if not self._trained:
             raise RuntimeError("Model not trained")
         import torch
-        
+
         X = np.column_stack([log_strikes, np.full_like(log_strikes, T)])
         X_scaled = self.scaler.transform(X)
         X_t = torch.tensor(X_scaled, dtype=torch.float32)
-        
+
         self.model.eval()
         with torch.no_grad():
             preds = self.model(X_t).numpy().flatten()
@@ -550,6 +549,7 @@ class VolSurfaceBenchmark:
                 calib_times.append(calib_time)
             except Exception as e:
                 import traceback
+
                 if self.verbose:
                     print(f"  Trial {trial}: Calibration failed - {e}")
                     traceback.print_exc()
@@ -750,7 +750,9 @@ def main():
     # Generate test data
     print("\nGenerating synthetic volatility surface...")
     data = generate_synthetic_surface(n_strikes=40, seed=42)
-    print(f"  Generated {len(data)} data points across {data['T'].nunique()} maturities")
+    print(
+        f"  Generated {len(data)} data points across {data['T'].nunique()} maturities"
+    )
 
     # Run benchmark
     benchmark = VolSurfaceBenchmark(models=args.models)
