@@ -63,19 +63,74 @@ class MarketDataCache:
 # Global cache instance
 _cache = MarketDataCache()
 
-# Rate limiting
+# Rate limiting with exponential backoff
 _last_request_time = 0
-_min_request_interval = 0.5  # 500ms between requests
+_min_request_interval = 1.0  # 1 second between requests (conservative)
+_consecutive_errors = 0
+_max_backoff = 60  # Max 60 seconds backoff
 
 
 def _rate_limit():
-    """Ensure minimum time between API requests."""
-    global _last_request_time
+    """Ensure minimum time between API requests with adaptive backoff."""
+    global _last_request_time, _consecutive_errors
     now = time.time()
+    
+    # Calculate delay with exponential backoff for errors
+    base_delay = _min_request_interval
+    if _consecutive_errors > 0:
+        backoff = min(base_delay * (2 ** _consecutive_errors), _max_backoff)
+        base_delay = backoff
+    
     elapsed = now - _last_request_time
-    if elapsed < _min_request_interval:
-        time.sleep(_min_request_interval - elapsed)
+    if elapsed < base_delay:
+        time.sleep(base_delay - elapsed)
     _last_request_time = time.time()
+
+
+def _request_success():
+    """Reset error counter on successful request."""
+    global _consecutive_errors
+    _consecutive_errors = 0
+
+
+def _request_failed():
+    """Increment error counter on failed request."""
+    global _consecutive_errors
+    _consecutive_errors = min(_consecutive_errors + 1, 5)  # Cap at 5
+
+
+def safe_yfinance_call(func, *args, max_retries: int = 3, **kwargs):
+    """
+    Wrapper for yfinance calls with retry logic and rate limiting.
+    
+    Args:
+        func: The yfinance function to call
+        *args: Arguments to pass to the function
+        max_retries: Maximum number of retry attempts
+        **kwargs: Keyword arguments to pass to the function
+        
+    Returns:
+        Result of the function call, or None if all retries failed
+    """
+    for attempt in range(max_retries):
+        _rate_limit()
+        try:
+            result = func(*args, **kwargs)
+            _request_success()
+            return result
+        except Exception as e:
+            _request_failed()
+            error_msg = str(e).lower()
+            
+            # Check for rate limiting indicators
+            if "429" in error_msg or "rate" in error_msg or "limit" in error_msg:
+                wait_time = min(5 * (2 ** attempt), 60)
+                time.sleep(wait_time)
+            elif attempt < max_retries - 1:
+                time.sleep(1)
+            else:
+                raise
+    return None
 
 
 def get_stock_price(ticker: str, use_cache: bool = True) -> Dict:
