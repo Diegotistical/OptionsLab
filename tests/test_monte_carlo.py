@@ -16,7 +16,7 @@ import pytest
 
 from src.exceptions.montecarlo_exceptions import InputValidationError, MonteCarloError
 from src.pricing_models.black_scholes import black_scholes
-from src.pricing_models.monte_carlo import NUMBA_AVAILABLE, MonteCarloPricer, MCMethod
+from src.pricing_models.monte_carlo import NUMBA_AVAILABLE, MCMethod, MonteCarloPricer
 from src.pricing_models.monte_carlo_ml import LIGHTGBM_AVAILABLE, MonteCarloMLSurrogate
 from src.pricing_models.monte_carlo_unified import (
     GPU_AVAILABLE,

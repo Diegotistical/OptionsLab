@@ -68,6 +68,31 @@ try:
 except ImportError:
     XGB_AVAILABLE = False
 
+# Benchmark and Data Loading imports
+try:
+    from src.benchmarks.vol_surface_benchmark import (
+        VolSurfaceBenchmark,
+        generate_synthetic_surface,
+    )
+    from src.data.data_loader import OptionChainLoader, OptionChainDataset
+
+    BENCHMARK_AVAILABLE = True
+except ImportError:
+    BENCHMARK_AVAILABLE = False
+
+# PINN Model import
+try:
+    from src.volatility_surface.models.pinn_model import (
+        PINNVolatilityModel,
+        create_pinn_model,
+        TORCH_AVAILABLE,
+        DEVICE_NAME,
+    )
+    PINN_AVAILABLE = TORCH_AVAILABLE
+except ImportError:
+    PINN_AVAILABLE = False
+    DEVICE_NAME = "N/A"
+
 
 # =============================================================================
 # VECTORIZED SURFACE CALCULATIONS
@@ -515,3 +540,332 @@ else:
     """,
         unsafe_allow_html=True,
     )
+
+# =============================================================================
+# BENCHMARK COMPARISON SECTION
+# =============================================================================
+section_divider()
+st.markdown("## 📊 Model Benchmark Comparison")
+
+if BENCHMARK_AVAILABLE:
+    with st.expander("⚙️ Benchmark Settings", expanded=False):
+        bench_col1, bench_col2, bench_col3 = st.columns(3)
+        
+        with bench_col1:
+            available_models = ["svi", "sabr", "mlp", "rf"]
+            if PINN_AVAILABLE:
+                available_models.append("pinn")
+            selected_models = st.multiselect(
+                "Select Models to Compare",
+                available_models,
+                default=["svi", "sabr", "mlp"],
+                key="bench_models",
+            )
+        
+        with bench_col2:
+            n_trials = st.slider("Number of Trials", 1, 10, 3, key="bench_trials")
+            test_size = st.slider("Test Size (%)", 10, 40, 20, key="bench_test") / 100
+        
+        with bench_col3:
+            bench_strikes = st.slider("Strikes per maturity", 20, 50, 30, key="bench_strikes")
+            bench_seed = st.number_input("Seed", 1, 99999, 42, key="bench_seed")
+    
+    run_benchmark_btn = st.button("🏃 Run Benchmark", type="primary", key="run_bench")
+    
+    if "benchmark_results" not in st.session_state:
+        st.session_state.benchmark_results = None
+    
+    if run_benchmark_btn:
+        if not selected_models:
+            st.warning("Please select at least one model")
+        else:
+            with st.spinner("Running benchmark... This may take a minute"):
+                # Generate benchmark data
+                bench_data = generate_synthetic_surface(
+                    n_strikes=bench_strikes,
+                    maturities=[0.1, 0.25, 0.5, 1.0, 2.0],
+                    seed=bench_seed,
+                )
+                
+                # Run benchmark
+                benchmark = VolSurfaceBenchmark(
+                    models=selected_models,
+                    verbose=False,
+                )
+                results = benchmark.run(bench_data, n_trials=n_trials, test_size=test_size)
+                st.session_state.benchmark_results = results
+                
+            st.success(f"✅ Benchmark complete! Tested {len(selected_models)} models over {n_trials} trials")
+    
+    if st.session_state.benchmark_results is not None:
+        results = st.session_state.benchmark_results
+        results_df = results.to_dataframe()
+        
+        # Display results table
+        st.markdown("### Results Summary")
+        
+        # Format results for display
+        display_df = results_df[["RMSE", "MAE", "MAPE (%)", "Calibration (ms)", "Arb-Free (%)"]].copy()
+        display_df = display_df.round(4)
+        
+        st.dataframe(
+            display_df.style.highlight_min(
+                subset=["RMSE", "MAE", "MAPE (%)"], 
+                color="#22c55e20"
+            ).highlight_max(
+                subset=["Arb-Free (%)"],
+                color="#22c55e20"
+            ),
+            use_container_width=True,
+        )
+        
+        # Best model callout
+        best = results.best_model("RMSE")
+        st.markdown(
+            f"""
+            <div class="metric-card" style="border-left: 4px solid #22c55e;">
+                <div class="metric-label">Best Model (by RMSE)</div>
+                <div class="metric-value" style="color: #22c55e;">{best}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        # Visualization
+        bench_col1, bench_col2 = st.columns(2)
+        
+        with bench_col1:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=display_df.index.tolist(),
+                y=display_df["RMSE"].values,
+                marker_color="#60a5fa",
+                text=display_df["RMSE"].round(4).values,
+                textposition="auto",
+            ))
+            fig.update_layout(**get_chart_layout("RMSE by Model", 300))
+            fig.update_yaxes(title_text="RMSE")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with bench_col2:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=display_df.index.tolist(),
+                y=display_df["Calibration (ms)"].values,
+                marker_color="#a78bfa",
+                text=display_df["Calibration (ms)"].round(1).values,
+                textposition="auto",
+            ))
+            fig.update_layout(**get_chart_layout("Calibration Time", 300))
+            fig.update_yaxes(title_text="Time (ms)")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Export results
+        csv_data = results_df.to_csv()
+        st.download_button(
+            "📥 Download Results (CSV)",
+            csv_data,
+            "benchmark_results.csv",
+            "text/csv",
+            key="download_bench",
+        )
+else:
+    st.info("Benchmark module not available. Check if `src/benchmarks` is properly installed.")
+
+# =============================================================================
+# DATA UPLOAD SECTION
+# =============================================================================
+section_divider()
+st.markdown("## 📁 Data Upload")
+
+if BENCHMARK_AVAILABLE:
+    upload_col1, upload_col2 = st.columns([2, 1])
+    
+    with upload_col1:
+        data_source = st.radio(
+            "Select Data Source",
+            ["Synthetic (Built-in)", "📡 yfinance (Live)", "Upload CSV", "Upload Parquet"],
+            horizontal=True,
+            key="data_source",
+        )
+    
+    with upload_col2:
+        if data_source == "Synthetic (Built-in)":
+            synth_spot = st.number_input("Spot Price", 50.0, 500.0, 100.0, key="synth_spot")
+        elif data_source == "📡 yfinance (Live)":
+            yf_ticker = st.text_input("Ticker", "AMD", key="yf_ticker")
+    
+    if data_source == "Upload CSV":
+        uploaded_file = st.file_uploader(
+            "Upload Option Chain CSV",
+            type=["csv"],
+            help="CSV with columns: strike, T (or expiry), implied_vol (or IV)",
+            key="csv_upload",
+        )
+        
+        if uploaded_file is not None:
+            try:
+                import io
+                df = pd.read_csv(io.StringIO(uploaded_file.read().decode("utf-8")))
+                dataset = OptionChainDataset(data=df, underlying_price=100.0)
+                st.session_state.uploaded_data = dataset
+                st.success(f"✅ Loaded {dataset.n_options} options from CSV")
+                
+                # Preview
+                st.dataframe(dataset.data.head(10), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error loading CSV: {e}")
+    
+    elif data_source == "Upload Parquet":
+        uploaded_file = st.file_uploader(
+            "Upload Option Chain Parquet",
+            type=["parquet"],
+            key="parquet_upload",
+        )
+        
+        if uploaded_file is not None:
+            try:
+                import io
+                df = pd.read_parquet(io.BytesIO(uploaded_file.read()))
+                dataset = OptionChainDataset(data=df, underlying_price=100.0)
+                st.session_state.uploaded_data = dataset
+                st.success(f"✅ Loaded {dataset.n_options} options from Parquet")
+                
+                st.dataframe(dataset.data.head(10), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error loading Parquet: {e}")
+    
+    elif data_source == "📡 yfinance (Live)":
+        st.info("⚠️ yfinance has rate limits. Uses caching + exponential backoff to avoid bans.")
+        
+        yf_expiries = st.slider("Number of expiries", 1, 5, 3, key="yf_expiries")
+        
+        if st.button(f"📡 Fetch {yf_ticker} Options", type="primary", key="fetch_yf"):
+            with st.spinner(f"Fetching {yf_ticker} options (rate limited)..."):
+                try:
+                    dataset = OptionChainLoader.from_yfinance(
+                        ticker=yf_ticker,
+                        n_expiries=yf_expiries,
+                        use_cache=True,
+                    )
+                    st.session_state.uploaded_data = dataset
+                    st.success(f"✅ Loaded {dataset.n_options} options for {yf_ticker} (spot=${dataset.underlying_price:.2f})")
+                    st.dataframe(dataset.data.head(10), use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error fetching {yf_ticker}: {e}")
+                    st.info("Try using Synthetic data to avoid rate limits.")
+    
+    else:  # Synthetic
+        if st.button("🔄 Generate Synthetic Data", key="gen_synth"):
+            dataset = OptionChainLoader.from_synthetic(
+                n_strikes=40,
+                maturities=[0.1, 0.25, 0.5, 1.0, 2.0],
+                spot=synth_spot,
+                seed=42,
+            )
+            st.session_state.uploaded_data = dataset
+            st.success(f"✅ Generated {dataset.n_options} synthetic options")
+            
+            st.dataframe(dataset.data.head(10), use_container_width=True)
+    
+    # Convert uploaded data to model input
+    if "uploaded_data" in st.session_state and st.session_state.uploaded_data is not None:
+        if st.button("🔧 Convert to Model Input", key="convert_data"):
+            try:
+                model_input = st.session_state.uploaded_data.to_model_input()
+                st.session_state.model_input_data = model_input
+                st.success(f"✅ Converted {len(model_input)} data points to model input format")
+                st.dataframe(model_input.head(), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error converting data: {e}")
+
+else:
+    st.info("Data loading module not available. Check if `src/data` is properly installed.")
+
+# =============================================================================
+# PINN MODEL SECTION
+# =============================================================================
+if PINN_AVAILABLE:
+    section_divider()
+    st.markdown("## 🧠 Physics-Informed Neural Network (PINN)")
+    
+    # Show GPU status
+    gpu_color = "#22c55e" if "AMD" in DEVICE_NAME or "NVIDIA" in DEVICE_NAME else "#f97316"
+    st.markdown(
+        f"""
+        <div class="metric-card" style="border-left: 4px solid {gpu_color};">
+            <div class="metric-label">Compute Device</div>
+            <div class="metric-value" style="color: {gpu_color};">{DEVICE_NAME}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    st.markdown(
+        """
+        <div class="metric-card">
+            <p style="color: #cbd5e1;">
+                PINN models combine neural network flexibility with <strong>arbitrage-free constraints</strong> 
+                built into the loss function. This guarantees no calendar or butterfly arbitrage.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    pinn_col1, pinn_col2 = st.columns(2)
+    
+    with pinn_col1:
+        constraint_strength = st.select_slider(
+            "Constraint Strength",
+            options=["weak", "medium", "strong"],
+            value="medium",
+            key="pinn_strength",
+            help="Stronger = more arbitrage-free, weaker = better fit",
+        )
+    
+    with pinn_col2:
+        pinn_epochs = st.slider("Training Epochs", 100, 1000, 300, 50, key="pinn_epochs")
+    
+    if "model_input_data" in st.session_state and st.session_state.model_input_data is not None:
+        if st.button("🚀 Train PINN Model", type="primary", key="train_pinn"):
+            with st.spinner(f"Training PINN ({pinn_epochs} epochs)..."):
+                try:
+                    pinn = create_pinn_model(
+                        constraint_strength=constraint_strength,
+                        epochs=pinn_epochs,
+                    )
+                    training_metrics = pinn.train(
+                        st.session_state.model_input_data,
+                        val_split=0.2,
+                    )
+                    st.session_state.pinn_model = pinn
+                    st.session_state.pinn_metrics = training_metrics
+                    
+                    st.success("✅ PINN training complete!")
+                    
+                    # Display metrics
+                    pinn_m1, pinn_m2, pinn_m3 = st.columns(3)
+                    with pinn_m1:
+                        st.metric("Final MSE", f"{training_metrics['final_mse']:.6f}")
+                    with pinn_m2:
+                        st.metric("Calendar Penalty", f"{training_metrics['final_calendar_penalty']:.6f}")
+                    with pinn_m3:
+                        st.metric("Butterfly Penalty", f"{training_metrics['final_butterfly_penalty']:.6f}")
+                    
+                    # Check arbitrage
+                    arb_metrics = pinn.check_arbitrage(st.session_state.model_input_data)
+                    st.markdown(
+                        f"""
+                        <div class="metric-card" style="border-left: 4px solid #22c55e;">
+                            <div class="metric-label">Arbitrage-Free</div>
+                            <div class="metric-value" style="color: #22c55e;">{arb_metrics.arbitrage_free_pct:.1f}%</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                except Exception as e:
+                    st.error(f"PINN training failed: {e}")
+    else:
+        st.info("Upload or generate data first, then convert to model input to train PINN.")
+
