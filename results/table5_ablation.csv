@@ -1,0 +1,7 @@
+Variant,RMSE,EPP,Arb-Free (%),Train Time (s)
+CINN (full),0.0891,0.0,100.0,91.3
+No warmup,0.0898,0.0,0.0,79.3
+No EMA norm,0.0968,0.0,0.0,76.8
+Linear hinge,0.142,0.0,100.0,76.5
+No residuals,0.0428,0.0,100.0,69.7
+ReLU activation,0.0261,0.0,100.0,64.7

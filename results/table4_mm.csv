@@ -1,0 +1,5 @@
+Model,Sharpe,Avg Spread,Spread Vol,P&L Std
+Rolling-window,0.101,6.6936,0.0024,255.7
+SABR-aware,0.104,6.6961,0.0037,253.87
+MLP-aware,0.104,6.6955,0.0033,253.87
+CINN-aware,0.103,6.6996,0.0057,250.65

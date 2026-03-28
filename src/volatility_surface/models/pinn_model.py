@@ -215,7 +215,7 @@ if TORCH_AVAILABLE:
 
         Architecture includes:
         - Input: (log_moneyness, sqrt(T), additional features)
-        - Hidden layers with residual connections
+        - Input-concatenated residual connections at each hidden layer
         - Output: total variance w = σ²T (ensures positivity via softplus)
         """
 
@@ -225,26 +225,42 @@ if TORCH_AVAILABLE:
             hidden_layers: List[int] = None,
             dropout: float = 0.1,
             use_residual: bool = True,
+            activation: str = "gelu",
         ):
             super().__init__()
 
             if hidden_layers is None:
-                hidden_layers = [64, 64, 32]
+                hidden_layers = [64, 32, 16]
 
+            self.input_dim = input_dim
             self.use_residual = use_residual
 
-            # Build layers
-            layers = []
+            # Activation factory
+            def make_activation(name: str):
+                if name == "gelu":
+                    return nn.GELU()
+                elif name == "relu":
+                    return nn.ReLU()
+                elif name == "silu":
+                    return nn.SiLU()
+                else:
+                    return nn.GELU()
+
+            # Build layers with input-concatenated residual connections
+            self.linears = nn.ModuleList()
+            self.activations = nn.ModuleList()
+            self.dropouts = nn.ModuleList()
+
             prev_dim = input_dim
-
             for i, hidden_dim in enumerate(hidden_layers):
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.GELU())  # Smoother than ReLU
+                self.linears.append(nn.Linear(prev_dim, hidden_dim))
+                self.activations.append(make_activation(activation))
                 if dropout > 0 and i < len(hidden_layers) - 1:
-                    layers.append(nn.Dropout(dropout))
-                prev_dim = hidden_dim
-
-            self.hidden = nn.Sequential(*layers)
+                    self.dropouts.append(nn.Dropout(dropout))
+                else:
+                    self.dropouts.append(nn.Identity())
+                # Next layer input: hidden_dim + input_dim (residual concat)
+                prev_dim = (hidden_dim + input_dim) if use_residual else hidden_dim
 
             # Output layer: produces total variance
             self.output = nn.Linear(prev_dim, 1)
@@ -257,7 +273,11 @@ if TORCH_AVAILABLE:
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             """
-            Forward pass.
+            Forward pass with input-concatenated residual connections.
+
+            At each hidden layer, the original input is concatenated to the
+            layer output before feeding into the next layer. This preserves
+            gradient flow and allows deeper layers direct access to raw features.
 
             Args:
                 x: Input tensor of shape (batch, input_dim)
@@ -266,11 +286,19 @@ if TORCH_AVAILABLE:
             Returns:
                 Total variance w = σ²T
             """
-            h = self.hidden(x)
+            h = x
+            for i, (linear, act, drop) in enumerate(
+                zip(self.linears, self.activations, self.dropouts)
+            ):
+                h = drop(act(linear(h)))
+                # Concatenate original input as residual connection
+                if self.use_residual:
+                    h = torch.cat([h, x], dim=-1)
+
             raw_output = self.output(h)
 
             # Ensure positive total variance with minimum
-            w = self.softplus(raw_output) + 1e-6
+            w = self.softplus(raw_output) * 0.5 + 1e-6
 
             return w
 
@@ -292,9 +320,10 @@ if TORCH_AVAILABLE:
         Penalizes violations of ∂w/∂T ≥ 0.
         """
 
-        def __init__(self, epsilon: float = 1e-6):
+        def __init__(self, epsilon: float = 1e-6, squared: bool = True):
             super().__init__()
             self.epsilon = epsilon
+            self.squared = squared
 
         def forward(
             self,
@@ -327,6 +356,8 @@ if TORCH_AVAILABLE:
 
             # Penalize negative derivatives (calendar arb)
             violations = torch.relu(-dw_dT)
+            if self.squared:
+                violations = violations.pow(2)
 
             return violations.mean()
 
@@ -334,13 +365,13 @@ if TORCH_AVAILABLE:
         """
         Butterfly spread arbitrage penalty.
 
-        Simplified version: penalizes extreme smile curvature.
-        Full implementation would compute density positivity.
+        Penalizes violations of Breeden-Litzenberger density positivity.
         """
 
-        def __init__(self, epsilon: float = 1e-6):
+        def __init__(self, epsilon: float = 1e-6, squared: bool = True):
             super().__init__()
             self.epsilon = epsilon
+            self.squared = squared
 
         def forward(
             self,
@@ -392,6 +423,8 @@ if TORCH_AVAILABLE:
 
             # Penalize negative g(k) (butterfly arb)
             violations = torch.relu(-g_k)
+            if self.squared:
+                violations = violations.pow(2)
 
             return violations.mean()
 
@@ -403,9 +436,10 @@ if TORCH_AVAILABLE:
             lim(k→±∞) σ(k)/|k| ≤ √(2/T)
         """
 
-        def __init__(self, epsilon: float = 1e-6):
+        def __init__(self, epsilon: float = 1e-6, squared: bool = True):
             super().__init__()
             self.epsilon = epsilon
+            self.squared = squared
 
         def forward(
             self,
@@ -430,8 +464,10 @@ if TORCH_AVAILABLE:
             # Rogers-Lee bound: σ(k) ≤ |k|√(2/T) for |k| → ∞
             max_sigma = torch.abs(k) * torch.sqrt(2 / T)
 
-            # Soft penalty
+            # Penalty
             excess = torch.relu(sigma - max_sigma - 0.1)
+            if self.squared:
+                excess = excess.pow(2)
 
             return (
                 excess[wing_mask].mean() if wing_mask.sum() > 0 else torch.tensor(0.0)
@@ -472,6 +508,12 @@ class PINNVolatilityModel(VolatilityModelBase):
         dropout: float = 0.1,
         device: Optional[str] = None,
         enable_benchmark: bool = False,
+        # Ablation flags
+        use_residual: bool = True,
+        activation: str = "gelu",
+        use_warmup: bool = True,
+        use_ema_norm: bool = True,
+        squared_hinge: bool = True,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for PINNVolatilityModel")
@@ -483,7 +525,7 @@ class PINNVolatilityModel(VolatilityModelBase):
             feature_columns=feature_columns, enable_benchmark=enable_benchmark
         )
 
-        self.hidden_layers = hidden_layers or [64, 64, 32]
+        self.hidden_layers = hidden_layers or [64, 32, 16]
         self.lambda_calendar = lambda_calendar
         self.lambda_butterfly = lambda_butterfly
         self.lambda_wing = lambda_wing
@@ -491,6 +533,12 @@ class PINNVolatilityModel(VolatilityModelBase):
         self.epochs = epochs
         self.batch_size = batch_size
         self.dropout = dropout
+        # Ablation flags
+        self.use_residual = use_residual
+        self.activation = activation
+        self.use_warmup = use_warmup
+        self.use_ema_norm = use_ema_norm
+        self.squared_hinge = squared_hinge
 
         # Set device - prefer AMD DirectML if available
         if device is None:
@@ -540,13 +588,15 @@ class PINNVolatilityModel(VolatilityModelBase):
             input_dim=len(self.feature_columns),
             hidden_layers=self.hidden_layers,
             dropout=self.dropout,
+            use_residual=self.use_residual,
+            activation=self.activation,
         ).to(self.device)
 
         # Loss functions
         mse_loss = nn.MSELoss()
-        calendar_loss = CalendarLoss()
-        butterfly_loss = ButterflyLoss()
-        wing_loss = WingLoss()
+        calendar_loss = CalendarLoss(squared=self.squared_hinge)
+        butterfly_loss = ButterflyLoss(squared=self.squared_hinge)
+        wing_loss = WingLoss(squared=self.squared_hinge)
 
         # Optimizer with weight decay
         self.optimizer = optim.AdamW(
@@ -564,8 +614,30 @@ class PINNVolatilityModel(VolatilityModelBase):
         dataset = TensorDataset(X_train, w_train)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
+        import copy
+
         self.training_history = []
         best_loss = float("inf")
+        best_feasible_mse = float("inf")
+        best_state = None
+
+        # Loss normalization: EMA variance trackers for each penalty term
+        ema_var = {"calendar": 1.0, "butterfly": 1.0, "wing": 1.0}
+        ema_alpha = 0.1  # EMA smoothing factor
+
+        use_warmup = self.use_warmup
+        use_ema_norm = self.use_ema_norm
+
+        def lambda_schedule(epoch: int) -> float:
+            """Warmup schedule: 100 epochs lambda=0, then linear ramp over 200."""
+            if not use_warmup:
+                return 1.0  # No warmup: full penalty from epoch 0
+            if epoch < 100:
+                return 0.0
+            elif epoch < 300:
+                return (epoch - 100) / 200.0
+            else:
+                return 1.0
 
         for epoch in range(self.epochs):
             self.model.train()
@@ -576,6 +648,8 @@ class PINNVolatilityModel(VolatilityModelBase):
                 "wing": 0,
                 "total": 0,
             }
+
+            schedule_weight = lambda_schedule(epoch)
 
             for batch_X, batch_w in loader:
                 self.optimizer.zero_grad()
@@ -591,12 +665,34 @@ class PINNVolatilityModel(VolatilityModelBase):
                 loss_butterfly = butterfly_loss(self.model, batch_X)
                 loss_wing = wing_loss(self.model, batch_X)
 
-                # Total loss
+                # Update EMA variance trackers for normalization
+                if schedule_weight > 0:
+                    for name, loss_val in [
+                        ("calendar", loss_calendar),
+                        ("butterfly", loss_butterfly),
+                        ("wing", loss_wing),
+                    ]:
+                        val = loss_val.item()
+                        ema_var[name] = (
+                            (1 - ema_alpha) * ema_var[name] + ema_alpha * max(val, 1e-8)
+                        )
+
+                # Normalize penalties to unit variance (if enabled), apply warmup schedule
+                if use_ema_norm:
+                    norm_calendar = loss_calendar / max(ema_var["calendar"], 1e-8)
+                    norm_butterfly = loss_butterfly / max(ema_var["butterfly"], 1e-8)
+                    norm_wing = loss_wing / max(ema_var["wing"], 1e-8)
+                else:
+                    norm_calendar = loss_calendar
+                    norm_butterfly = loss_butterfly
+                    norm_wing = loss_wing
+
+                # Total loss with warmup-scheduled penalty weights
                 total_loss = (
                     loss_mse
-                    + self.lambda_calendar * loss_calendar
-                    + self.lambda_butterfly * loss_butterfly
-                    + self.lambda_wing * loss_wing
+                    + schedule_weight * self.lambda_calendar * norm_calendar
+                    + schedule_weight * self.lambda_butterfly * norm_butterfly
+                    + schedule_weight * self.lambda_wing * norm_wing
                 )
 
                 # Backward pass
@@ -624,6 +720,25 @@ class PINNVolatilityModel(VolatilityModelBase):
 
             if epoch_losses["total"] < best_loss:
                 best_loss = epoch_losses["total"]
+
+            # Constraint-aware checkpoint: save best model that satisfies constraints
+            checkpoint_start = 100 if not use_warmup else 300
+            if epoch >= checkpoint_start and epoch % 50 == 0:
+                self.model.eval()
+                X_check = X_train.detach().clone().requires_grad_(True)
+                check_cal = calendar_loss(self.model, X_check).item()
+                check_but = butterfly_loss(self.model, X_check).item()
+                self.model.train()
+
+                is_feasible = (check_cal + check_but) < 1e-6
+                current_mse = epoch_losses["mse"] / n_batches
+
+                if is_feasible and current_mse < best_feasible_mse:
+                    best_feasible_mse = current_mse
+                    best_state = copy.deepcopy(self.model.state_dict())
+
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
 
         self._is_trained = True
 
@@ -708,7 +823,47 @@ class PINNVolatilityModel(VolatilityModelBase):
             arbitrage_free_pct=arb_free_pct,
         )
 
-    def save_model(self, model_path: str, scaler_path: str = "") -> None:
+    def predict_with_uncertainty(
+        self, df: pd.DataFrame, n_samples: int = 50
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Predict implied volatility with uncertainty via MC dropout.
+
+        Runs multiple forward passes with dropout enabled to estimate
+        epistemic uncertainty. Higher uncertainty at wings and sparse regions.
+
+        Args:
+            df: DataFrame with feature columns
+            n_samples: Number of MC forward passes
+
+        Returns:
+            (mean_predictions, std_predictions)
+        """
+        if self.model is None:
+            raise RuntimeError("Model not trained")
+
+        X = df[self.feature_columns].values.astype(np.float32)
+        X_transformed = X.copy()
+        if "T" in self.feature_columns:
+            t_idx = self.feature_columns.index("T")
+            X_transformed[:, t_idx] = np.sqrt(X_transformed[:, t_idx])
+
+        X_tensor = torch.tensor(X_transformed, device=self.device)
+
+        # MC dropout: enable training mode to activate dropout
+        self.model.train()
+        predictions = []
+        with torch.no_grad():
+            for _ in range(n_samples):
+                sigma = self.model.implied_vol(X_tensor)
+                predictions.append(sigma.cpu().numpy().flatten())
+
+        self.model.eval()
+
+        predictions = np.stack(predictions, axis=0)
+        return predictions.mean(axis=0), predictions.std(axis=0)
+
+    def _save_model_impl(self, model_path: str, scaler_path: str) -> None:
         """Save model to disk."""
         if self.model is None:
             raise RuntimeError("No model to save")
@@ -722,11 +877,12 @@ class PINNVolatilityModel(VolatilityModelBase):
                 "lambda_butterfly": self.lambda_butterfly,
                 "lambda_wing": self.lambda_wing,
                 "training_history": self.training_history,
+                "dropout": self.dropout,
             },
             model_path,
         )
 
-    def load_model(self, model_path: str, scaler_path: str = "") -> None:
+    def _load_model_impl(self, model_path: str, scaler_path: str) -> None:
         """Load model from disk."""
         checkpoint = torch.load(model_path, map_location=self.device)
 
@@ -740,6 +896,7 @@ class PINNVolatilityModel(VolatilityModelBase):
         self.model = PINNNetwork(
             input_dim=len(self.feature_columns),
             hidden_layers=self.hidden_layers,
+            dropout=checkpoint.get("dropout", self.dropout),
         ).to(self.device)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])

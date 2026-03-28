@@ -1,0 +1,4 @@
+Model,P&L Std,99th Pctile Loss,|Delta Error|,Hedge Eff.
+CINN,2.215,-4.2434,0.1327,0.9094
+MLP,1.2689,-2.1609,0.0576,0.9703
+SABR,1.5237,-2.8285,0.077,0.9571

@@ -1,0 +1,4 @@
+Dropout (%),Coverage (95% CI),Mean Uncertainty,Spearman r (unc vs dist),Spearman p-value
+20,0.8,0.0325,0.375,0.041
+40,0.4,0.0233,0.277,0.0322
+60,0.467,0.0105,0.344,0.0009
