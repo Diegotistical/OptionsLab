@@ -1,0 +1,13 @@
+Dense-Grid Constraint Evaluation Summary
+==================================================
+
+Grid: Training grid (150 points)
+  Arb-free: 100.0%
+  Calendar violations: 0  (max=0.000000e+00, mean=0.000000e+00)
+  Butterfly violations: 0  (max=0.000000e+00, mean=0.000000e+00)
+
+Grid: Dense grid (5000 points)
+  Arb-free: 99.9%
+  Calendar violations: 5  (max=5.667627e-03, mean=2.165748e-03)
+  Butterfly violations: 0  (max=0.000000e+00, mean=0.000000e+00)
+
