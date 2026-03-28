@@ -17,9 +17,9 @@
 \usepackage{bm}
 \usepackage{enumitem}
 \usepackage{microtype}
+\usepackage{natbib}
 \usepackage[colorlinks=true,linkcolor=blue!70!black,citecolor=green!50!black,urlcolor=blue!60!black]{hyperref}
 \usepackage{cleveref}
-\usepackage{natbib}
 
 % Spacing
 \setlength{\parskip}{0.5em}
@@ -35,10 +35,11 @@
 \newtheorem{remark}[theorem]{Remark}
 \newtheorem{example}[theorem]{Example}
 
-% Commands
-\newcommand{\E}{\mathbb{E}}
-\newcommand{\R}{\mathbb{R}}
-\DeclareMathOperator*{\argmin}{arg\,min}
+% Commands (use providecommand to avoid conflicts)
+\providecommand{\E}{\mathbb{E}}
+\renewcommand{\E}{\mathbb{E}}
+\providecommand{\R}{\mathbb{R}}
+\renewcommand{\R}{\mathbb{R}}
 \newcommand{\loss}{\mathcal{L}}
 \newcommand{\totalvar}{w}
 \newcommand{\density}{g}
@@ -125,7 +126,7 @@ We state our caveats upfront:
 \label{sec:constraints}
 %==============================================================================
 
-\textbf{Notation.} $k = \log(K/F)$ is log-moneyness, $T$ is time-to-maturity, $\totalvar(k,T) = \sigma^2(k,T) \cdot T$ is total implied variance, $\density(k,T)$ is the Breeden-Litzenberger density.
+\textbf{Notation.} $k = \log(K/F)$ is log-moneyness, $T$ is time-to-maturity, $\totalvar(k,T) = \sigma^2(k,T) \cdot T$ is total implied variance, $\density(k,T)$ is the Breeden-Litzenberger density~\citep{breeden1978}.
 
 \begin{definition}[Admissibility]
 \label{def:admissibility}
