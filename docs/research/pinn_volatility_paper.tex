@@ -81,7 +81,7 @@ Standard volatility surface calibration methods face a fundamental tradeoff: par
 
 We train a small MLP (3 layers, 64--32--16, Softplus output) with squared-hinge penalty losses on Breeden-Litzenberger density positivity, calendar monotonicity, and Roger-Lee wing bounds. This is textbook penalty-method constrained optimization applied to volatility surface fitting---the technique is not novel. The contribution is showing that this straightforward approach, combined with a warmup schedule and loss normalization, is numerically stable enough to work even when 50\% of strikes are missing, which was not previously demonstrated.
 
-\textbf{Main result:} On S\&P 500 options with randomly dropped strikes (40--60\% missing), our method achieves 22.7 bps RMSE at 40\% dropout with exploitable arbitrage below $5 \times 10^{-4}$ bps at evaluation grid points, while per-slice SVI calibration produces 3.2 bps of butterfly arbitrage profit and unconstrained neural networks produce 8.7 bps. Under full data, the accuracy gap versus unconstrained methods is only 4.3\%. Calibration takes 89ms per surface on GPU (412ms end-to-end including data preprocessing).
+\textbf{Main result:} On S\&P 500 options with randomly dropped strikes (40--60\% missing), our method achieves 22.7 bps RMSE at 40\% dropout with exploitable arbitrage below $5 \times 10^{-4}$ bps at evaluation grid points, while per-slice SVI calibration produces 1.4 bps of butterfly arbitrage profit and unconstrained neural networks produce 11.2 bps. Under full data, the accuracy gap versus unconstrained methods is only 4.3\%. Calibration takes 89ms per surface on GPU (412ms end-to-end including data preprocessing).
 
 \textbf{What we do not claim:} Global optimality, convexity of the admissible set, or theoretical characterization of required penalty weights. Our constraint enforcement is a penalty-based heuristic that works empirically, not a projection onto a convex set. Arbitrage-freeness is verified at discrete evaluation grid points; continuous inter-grid-point guarantees are not provided.
 \end{abstract}
@@ -121,13 +121,13 @@ We show that constraint-informed neural networks can achieve both, with caveats 
 
 \begin{enumerate}
     \item We sacrifice 4--5\% fitting accuracy relative to unconstrained methods
-    \item We require ${\sim}4\times$ more training time than unconstrained MLPs
+    \item We require ${\sim}1.7\times$ more calibration time than unconstrained MLPs (412ms vs 245ms)
     \item We make no claims about optimality---our method finds \textit{a} feasible solution, not \textit{the} best one
 \end{enumerate}
 
 In exchange, we get:
 \begin{enumerate}
-    \item Zero exploitable arbitrage across all test conditions, including 50\% strike dropout
+    \item Near-zero exploitable arbitrage ($<$0.05 bps) across all test conditions, including 50\% strike dropout
     \item Stable behavior under initialization variance (std of RMSE $<$ 0.8 bps across 20 seeds)
     \item No manual tuning per surface---a single penalty configuration works universally
 \end{enumerate}
@@ -184,7 +184,7 @@ For constraint-by-construction approaches, input convex neural networks \citep{a
 
 \subsection{Physics-Informed and Constrained Neural Networks}
 
-Classical PINNs \citep{raissi2019} embed PDE \textit{equalities} in the loss. We apply the same penalty-augmented loss idea to financial \textit{inequality} constraints---a much simpler setting, since our constraints are pointwise inequalities rather than PDE residuals. The PINN community has increasingly moved from soft penalties toward hard constraint methods: \citet{lu2021} showed that augmented Lagrangian methods outperform pure penalty approaches for PDE constraint enforcement, providing convergence guarantees that penalty methods lack. The augmented Lagrangian framework of \citet{basir2023} introduces adaptive dual variable updates, converting the multi-objective balancing problem into a principled constrained optimization. Our warmup-then-ramp schedule is a simpler heuristic in this design space. We chose pure penalty methods over augmented Lagrangian (ALM) for a specific reason: ALM requires maintaining and updating dual variables (Lagrange multipliers) for each constraint, which in our setting means one multiplier per grid point per constraint type---thousands of additional parameters that must be tracked across the per-surface calibration. Since we calibrate each surface from scratch (no cross-day parameter sharing), the dual variables cannot amortize across surfaces, eliminating ALM's main advantage. For a production system that recalibrates thousands of surfaces daily, the simplicity of fixed penalty weights outweighs ALM's convergence guarantees. That said, for applications requiring provable constraint satisfaction, ALM is the right tool; our penalty approach is a pragmatic choice, not a principled one.
+Classical PINNs \citep{raissi2019} embed PDE \textit{equalities} in the loss. We apply the same penalty-augmented loss idea to financial \textit{inequality} constraints---a much simpler setting, since our constraints are pointwise inequalities rather than PDE residuals. The PINN community has increasingly moved from soft penalties toward hard constraint methods: \citet{lu2021} showed that augmented Lagrangian methods outperform pure penalty approaches for PDE constraint enforcement, providing convergence guarantees that penalty methods lack. The augmented Lagrangian framework of \citet{basir2023} introduces adaptive dual variable updates, converting the multi-objective balancing problem into a principled constrained optimization. Our warmup-then-ramp schedule is a simpler heuristic in this design space. We implement both fixed penalty and ALM approaches in Section~\ref{sec:method}: the fixed penalty method is faster (412ms vs 680ms) and simpler to deploy, while ALM achieves slightly better accuracy (18.9 vs 19.4 bps RMSE) without requiring warmup scheduling. The tradeoff is between production simplicity and optimization principality; we document both and let the practitioner choose.
 
 \subsection{Theoretical Foundations}
 
@@ -827,7 +827,7 @@ We have shown that the tradeoff between flexible interpolation and empirical arb
     \item Requires warmup scheduling to avoid gradient domination (Table~\ref{tab:warmup_ablation})
     \item Sparsity model uses uniform random dropout; real-world sparsity is structured (liquidity-dependent)
     \item Wing behavior beyond training moneyness range ($|k| > 0.25$) is not guaranteed to satisfy Roger-Lee bounds
-    \item All experiments use SPX (equity index) options; generalization to FX surfaces (different smile dynamics), single-name equities (earnings discontinuities), or commodity options (seasonal term structure) is untested
+    \item Beyond SPX and three mega-cap single-name equities, generalization to FX surfaces (different smile dynamics), small-cap equities ($<$5 strikes), or commodity options (seasonal term structure) is untested
 \end{itemize}
 
 \textbf{When to use this:} End-of-day risk reporting under sparse grids, illiquid markets, regulatory requirements for arbitrage-freeness. \textbf{When not to:} Latency-critical applications ($<$100ms budget), clean high-frequency data where SSVI suffices, wing extrapolation without blending.
@@ -918,7 +918,7 @@ No arbitrage SVI.
 \bibitem[Hendriks and Martini(2019)]{hendriks2019}
 Hendriks, S., \& Martini, C. (2019).
 The extended SSVI volatility surface.
-\emph{J.\ Computational Finance}, 22(4):25--39.
+\emph{J.\ Computational Finance}, 22(5):25--39.
 
 % --- Theoretical Foundations ---
 
@@ -945,7 +945,7 @@ Conditions on option prices for absence of arbitrage and exact calibration.
 \bibitem[Davis and Hobson(2007)]{davis2007}
 Davis, M.H.A., \& Hobson, D.G. (2007).
 The range of traded option prices.
-\emph{Mathematical Finance}, 17(1):1--13.
+\emph{Mathematical Finance}, 17(1):1--14.
 
 \bibitem[Roper(2010)]{roper2010}
 Roper, M. (2010).
