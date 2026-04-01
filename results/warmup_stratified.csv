@@ -1,0 +1,13 @@
+Regime,Schedule,RMSE (bps),RMSE Std,Flat Rate
+Calm (vol=15%),No warmup,1414.4,621.4,0%
+Calm (vol=15%),Short (50+100),1071.5,130.9,0%
+Calm (vol=15%),Production (100+200),863.9,105.4,0%
+Calm (vol=15%),Long (200+300),1007.0,75.7,0%
+Moderate (vol=20%),No warmup,1130.2,253.1,0%
+Moderate (vol=20%),Short (50+100),1195.1,97.9,0%
+Moderate (vol=20%),Production (100+200),1152.4,168.6,0%
+Moderate (vol=20%),Long (200+300),1086.2,230.9,0%
+Stress (vol=35%),No warmup,1701.3,492.1,0%
+Stress (vol=35%),Short (50+100),2253.9,401.2,0%
+Stress (vol=35%),Production (100+200),2041.9,763.3,0%
+Stress (vol=35%),Long (200+300),1607.6,108.9,0%

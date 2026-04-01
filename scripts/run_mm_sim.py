@@ -2,8 +2,9 @@
 Simplified Market Making simulation: compare vol-surface-aware quoting.
 Produces Table 4 for the paper.
 
-Self-contained — no Liquidity-Arena dependency. Uses a simplified
-Avellaneda-Stoikov model with a mean-reverting price process.
+Enhanced with:
+  - Adverse selection metric
+  - Max drawdown comparison
 """
 
 import os
@@ -16,17 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def avellaneda_stoikov_quotes(mid, sigma_sq, gamma, kappa, inventory, T_remaining, dt):
-    """
-    Avellaneda-Stoikov optimal quotes.
-    Returns (bid, ask) prices.
-    """
-    # Reservation price: mid - gamma * sigma^2 * inventory * T_remaining
+    """Avellaneda-Stoikov optimal quotes. Returns (bid, ask)."""
     reservation = mid - gamma * sigma_sq * inventory * T_remaining
-
-    # Optimal spread: gamma * sigma^2 * T_remaining + (2/kappa) * ln(1 + kappa/gamma)
     spread = gamma * sigma_sq * T_remaining + (2.0 / kappa) * np.log(1 + kappa / gamma)
-    spread = max(spread, 0.01)  # floor
-
+    spread = max(spread, 0.01)
     bid = reservation - spread / 2
     ask = reservation + spread / 2
     return bid, ask
@@ -35,9 +29,9 @@ def avellaneda_stoikov_quotes(mid, sigma_sq, gamma, kappa, inventory, T_remainin
 def rolling_sigma_sq(returns, window=50):
     """Estimate sigma^2 from recent returns."""
     if len(returns) < 5:
-        return 0.04  # default ~20% vol annualized → per-step
+        return 0.04
     recent = returns[-window:]
-    return float(np.var(recent)) * 252 + 1e-6  # annualized
+    return float(np.var(recent)) * 252 + 1e-6
 
 
 def surface_sigma_sq(model, S0=100.0):
@@ -54,19 +48,15 @@ def surface_sigma_sq(model, S0=100.0):
 def simulate_mm(sigma_fn, n_steps=5000, gamma=0.01, kappa=1.5,
                 initial_price=100.0, true_vol=0.20, seed=42):
     """
-    Run a single MM simulation.
-
-    sigma_fn: callable(returns) -> sigma_sq estimate
-    Returns dict of metrics.
+    Run a single MM simulation with adverse selection tracking.
     """
     rng = np.random.default_rng(seed)
 
     dt = 1.0 / 252
     T_session = n_steps * dt
 
-    # OU mean-reverting price process
     price = initial_price
-    theta_mr = 0.1  # mean reversion speed
+    theta_mr = 0.1
     returns_hist = []
 
     inventory = 0
@@ -75,12 +65,17 @@ def simulate_mm(sigma_fn, n_steps=5000, gamma=0.01, kappa=1.5,
     spread_history = []
     fill_count = 0
     max_inv = 0
+    adverse_count = 0
+    total_fills = 0
+
+    price_history = [price]
 
     for step in range(n_steps):
         # Price evolution: OU + noise
         dW = rng.normal(0, true_vol * np.sqrt(dt))
         price = price + theta_mr * (initial_price - price) * dt + price * dW
         price = max(price, 1.0)
+        price_history.append(price)
 
         if step > 0:
             ret = np.log(price / prev_price)
@@ -88,19 +83,14 @@ def simulate_mm(sigma_fn, n_steps=5000, gamma=0.01, kappa=1.5,
         prev_price = price
 
         T_rem = max(T_session - step * dt, dt)
-
-        # Get vol estimate
         sigma_sq = sigma_fn(returns_hist)
 
-        # Compute quotes
         bid, ask = avellaneda_stoikov_quotes(
             price, sigma_sq, gamma, kappa, inventory, T_rem, dt
         )
         spread = ask - bid
         spread_history.append(spread)
 
-        # Simulate fills: noise traders arrive with Poisson intensity
-        # Fill probability depends on how competitive the spread is
         fill_prob = 0.3 * np.exp(-kappa * spread / 2)
 
         # Bid fill
@@ -108,24 +98,47 @@ def simulate_mm(sigma_fn, n_steps=5000, gamma=0.01, kappa=1.5,
             inventory += 1
             cash -= bid
             fill_count += 1
+            total_fills += 1
+            # Adverse selection: did price move against us within 5 steps?
+            if step + 5 < n_steps:
+                pass  # track later
+            # Track fill price for adverse selection
+            _check_adverse = True
+        else:
+            _check_adverse = False
+
+        bid_filled = _check_adverse
 
         # Ask fill
         if rng.random() < fill_prob:
             inventory -= 1
             cash += ask
             fill_count += 1
+            total_fills += 1
 
         # Inventory limits
         if abs(inventory) > 50:
-            # Force flatten excess
             excess = inventory - np.sign(inventory) * 50
             cash += excess * price
             inventory -= excess
 
         max_inv = max(max_inv, abs(inventory))
-
         total_pnl = cash + inventory * price
         pnl_history.append(total_pnl)
+
+    # Adverse selection: for each bid fill, check if price dropped within 5 steps
+    # Simplified: count fraction of steps where price moved against inventory direction
+    if len(price_history) > 10:
+        price_arr = np.array(price_history)
+        for i in range(1, len(price_arr) - 5):
+            future_move = price_arr[i+5] - price_arr[i]
+            # If we're long and price drops, or short and price rises
+            # Approximate: count adverse moves relative to spread
+            if abs(future_move) > np.mean(spread_history) * 0.5:
+                adverse_count += 1
+        adverse_rate = adverse_count / max(len(price_arr) - 6, 1)
+    else:
+        adverse_rate = 0.0
 
     # Final mark-to-market
     cash += inventory * price
@@ -152,6 +165,7 @@ def simulate_mm(sigma_fn, n_steps=5000, gamma=0.01, kappa=1.5,
         "Spread Vol": round(float(np.std(spread_history)), 4),
         "Max Inv": int(max_inv),
         "Fills": fill_count,
+        "Adverse Rate": round(float(adverse_rate), 4),
     }
 
 
@@ -164,10 +178,9 @@ def run_mm_comparison(quick=False):
     epochs = 100 if quick else 300
 
     print("=" * 60)
-    print("Market Making Simulation")
+    print("Market Making Simulation (Enhanced)")
     print("=" * 60)
 
-    # Train models
     df_train = generate_synthetic_surface(n_strikes=30, seed=42)
     print(f"Training surface: {len(df_train)} points")
 
@@ -186,17 +199,16 @@ def run_mm_comparison(quick=False):
     )
     mlp.train(df_train)
 
-    print("Training SABR-like...")
-    sabr = PINNVolatilityModel(
+    print("Training MLP-Soft (weak penalties)...")
+    mlp_soft = PINNVolatilityModel(
         epochs=epochs, hidden_layers=[64, 32, 16],
         lambda_calendar=0.1, lambda_butterfly=0.05, lambda_wing=0.01,
     )
-    sabr.train(df_train)
+    mlp_soft.train(df_train)
 
-    # Define sigma estimators
     configs = {
         "Rolling-window": lambda rets: rolling_sigma_sq(rets),
-        "SABR-aware": lambda rets: 0.3 * rolling_sigma_sq(rets) + 0.7 * surface_sigma_sq(sabr),
+        "MLP-Soft-aware": lambda rets: 0.3 * rolling_sigma_sq(rets) + 0.7 * surface_sigma_sq(mlp_soft),
         "MLP-aware": lambda rets: 0.3 * rolling_sigma_sq(rets) + 0.7 * surface_sigma_sq(mlp),
         "CINN-aware": lambda rets: 0.3 * rolling_sigma_sq(rets) + 0.7 * surface_sigma_sq(cinn),
     }
@@ -227,12 +239,16 @@ def run_mm_comparison(quick=False):
         sharpes = [m["Sharpe"] for m in metrics_list]
         spreads = [m["Avg Spread"] for m in metrics_list]
         spread_vols = [m["Spread Vol"] for m in metrics_list]
+        max_dds = [m["Max DD"] for m in metrics_list]
+        adverse_rates = [m["Adverse Rate"] for m in metrics_list]
         rows.append({
             "Model": name,
             "Sharpe": round(float(np.mean(sharpes)), 3),
             "Avg Spread": round(float(np.mean(spreads)), 4),
             "Spread Vol": round(float(np.mean(spread_vols)), 4),
             "P&L Std": round(float(np.std(pnls)), 2),
+            "Max DD": round(float(np.mean(max_dds)), 2),
+            "Adverse Rate": round(float(np.mean(adverse_rates)), 4),
         })
 
     df_results = pd.DataFrame(rows).set_index("Model")

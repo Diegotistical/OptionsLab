@@ -1,4 +1,4 @@
-Model,P&L Std,99th Pctile Loss,|Delta Error|,Hedge Eff.
-CINN,2.215,-4.2434,0.1327,0.9094
-MLP,1.2689,-2.1609,0.0576,0.9703
-SABR,1.5237,-2.8285,0.077,0.9571
+Model,P&L Std,99th Pctile Loss,|Delta Error|,Hedge Eff.,Vol Bias,Vol Bias Std,P&L Std (Low Vol),P&L Std (High Vol)
+CINN,1.8097,-3.0176,0.0963,0.9385,0.1577,0.0949,N/A,N/A
+MLP,1.8571,-3.2281,0.0941,0.9352,0.1527,0.1147,N/A,N/A
+MLP-Soft,2.0015,-3.6009,0.1072,0.9247,0.1839,0.1267,N/A,N/A

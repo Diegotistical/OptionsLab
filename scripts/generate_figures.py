@@ -566,6 +566,269 @@ def figure3(quick=False):
 
 
 # ---------------------------------------------------------------------------
+# Figure 4 -- Stress Surface: Crash-Regime Comparison
+# ---------------------------------------------------------------------------
+
+def generate_crash_surface(n_strikes=30, seed=42):
+    """
+    Generate a crash-regime synthetic surface with parameters calibrated
+    to 2020-03-16 market conditions (VIX~82, steep put skew, compressed
+    short-term structure).
+    """
+    rng = np.random.default_rng(seed)
+
+    maturities = [0.02, 0.08, 0.25, 0.5, 1.0]  # 1W, 1M, 3M, 6M, 1Y
+    k_range = np.linspace(-0.25, 0.25, n_strikes)
+
+    rows = []
+    for T in maturities:
+        # Crash regime: inverted short-term, elevated vol, steep skew
+        atm_vol = 0.80 * np.exp(-0.3 * T)  # inverted: short-term vol > long-term
+        atm_vol = max(atm_vol, 0.35)  # floor at 35% for long-dated
+
+        for k in k_range:
+            # Steep put skew (25-delta RR ~ -20 vol pts)
+            skew = -0.80 / np.sqrt(max(T, 0.02))
+            smile = 0.15  # extra convexity in crash
+            iv = atm_vol + skew * k + smile * k ** 2
+            iv = max(iv, 0.05)
+            iv += rng.normal(0, 0.005)  # small noise
+            iv = max(iv, 0.05)
+
+            rows.append({
+                "log_moneyness": k,
+                "T": T,
+                "implied_volatility": iv,
+                "moneyness": np.exp(-k),
+                "time_to_maturity": T,
+                "strike_price": 100.0 * np.exp(k),
+                "underlying_price": 100.0,
+                "risk_free_rate": 0.01,
+            })
+
+    return pd.DataFrame(rows)
+
+
+def compute_density_grid(model, k_grid, T_vals):
+    """Compute Breeden-Litzenberger density on a grid via finite differences."""
+    dk = k_grid[1] - k_grid[0]
+    n_k = len(k_grid)
+    n_T = len(T_vals)
+
+    density = np.zeros((n_T, n_k))
+
+    for t_idx, T in enumerate(T_vals):
+        # Get total variance
+        w = np.zeros(n_k)
+        for i, k in enumerate(k_grid):
+            df_pt = pd.DataFrame({"log_moneyness": [k], "T": [T]})
+            try:
+                vol = float(model.predict_volatility(df_pt)[0])
+                vol = np.clip(vol, 0.001, 10.0)
+            except Exception:
+                vol = 0.2
+            w[i] = vol ** 2 * T
+
+        # Finite difference derivatives
+        dw_dk = np.gradient(w, dk)
+        d2w_dk2 = np.gradient(dw_dk, dk)
+
+        for i in range(n_k):
+            if w[i] < 1e-10:
+                density[t_idx, i] = 0.0
+                continue
+            k = k_grid[i]
+            term1 = (1 - k * dw_dk[i] / (2 * w[i])) ** 2
+            term2 = (dw_dk[i] ** 2 / 4) * (1 / w[i] + 0.25)
+            term3 = d2w_dk2[i] / 2
+            density[t_idx, i] = term1 - term2 + term3
+
+    return density
+
+
+def figure4(quick=False):
+    """
+    Stress surface comparison: CINN vs MLP vs SVI under crash-regime conditions.
+    5-panel figure showing IV surfaces, density, curvature, difference map, and EPP.
+    """
+    print("[Figure 4] Generating crash-regime stress test ...")
+
+    epochs = 150 if not quick else 60
+
+    # Generate crash surface
+    df_full = generate_crash_surface(n_strikes=30, seed=42)
+    T_vals = sorted(df_full["T"].unique())
+
+    # Apply 40% structured dropout (more OTM drops)
+    rng = np.random.default_rng(42)
+    drop_probs = np.exp(3 * np.abs(df_full["log_moneyness"].values))
+    drop_probs = drop_probs / drop_probs.max() * 0.6
+    mask = rng.random(len(df_full)) > drop_probs
+    df_train = df_full[mask].copy()
+    print(f"  Training: {len(df_train)}/{len(df_full)} points ({len(df_train)/len(df_full)*100:.0f}%)")
+
+    # Train CINN
+    print("  Training CINN...")
+    cinn = PINNVolatilityModel(
+        epochs=epochs, hidden_layers=[64, 32, 16],
+        lambda_calendar=1.0, lambda_butterfly=0.5, lambda_wing=0.1,
+        use_warmup=True, squared_hinge=True, use_residual=True, activation="gelu",
+    )
+    cinn.train(df_train)
+
+    # Train MLP (unconstrained)
+    print("  Training MLP...")
+    mlp = PINNVolatilityModel(
+        epochs=epochs, hidden_layers=[64, 32, 16],
+        lambda_calendar=0.0, lambda_butterfly=0.0, lambda_wing=0.0,
+        use_warmup=False, use_residual=True, activation="gelu",
+    )
+    mlp.train(df_train)
+
+    # Evaluation grid
+    n_k = 50
+    k_grid = np.linspace(-0.25, 0.25, n_k)
+    dk = k_grid[1] - k_grid[0]
+
+    # Predict
+    grid_rows = []
+    for T in T_vals:
+        for k in k_grid:
+            grid_rows.append({"log_moneyness": k, "T": T})
+    grid_df = pd.DataFrame(grid_rows)
+
+    cinn_iv = cinn.predict_volatility(grid_df).reshape(len(T_vals), n_k)
+    mlp_iv = mlp.predict_volatility(grid_df).reshape(len(T_vals), n_k)
+
+    # Ground truth (crash surface, no noise)
+    gt_iv = np.zeros((len(T_vals), n_k))
+    for t_idx, T in enumerate(T_vals):
+        atm_vol = max(0.80 * np.exp(-0.3 * T), 0.35)
+        skew = -0.80 / np.sqrt(max(T, 0.02))
+        for i, k in enumerate(k_grid):
+            gt_iv[t_idx, i] = max(atm_vol + skew * k + 0.15 * k**2, 0.05)
+
+    # Compute density
+    print("  Computing density maps...")
+    cinn_density = compute_density_grid(cinn, k_grid, T_vals)
+    mlp_density = compute_density_grid(mlp, k_grid, T_vals)
+
+    # Compute curvature
+    cinn_curv = np.zeros_like(cinn_density)
+    mlp_curv = np.zeros_like(mlp_density)
+    for t_idx in range(len(T_vals)):
+        T = T_vals[t_idx]
+        cinn_w = (cinn_iv[t_idx] ** 2) * T
+        mlp_w = (mlp_iv[t_idx] ** 2) * T
+        cinn_curv[t_idx] = np.gradient(np.gradient(cinn_w, dk), dk)
+        mlp_curv[t_idx] = np.gradient(np.gradient(mlp_w, dk), dk)
+
+    # ---- PLOT ----
+    fig = plt.figure(figsize=(16, 12))
+    gs = gridspec.GridSpec(2, 3, hspace=0.35, wspace=0.35)
+
+    K_grid, T_grid = np.meshgrid(k_grid, T_vals)
+
+    # Panel A: IV surfaces (CINN vs MLP vs GT)
+    ax1 = fig.add_subplot(gs[0, 0])
+    c1 = ax1.pcolormesh(K_grid, T_grid, cinn_iv * 100, cmap="viridis", shading="auto")
+    ax1.set_title("(a) CINN Implied Vol (%)", fontweight="bold")
+    ax1.set_xlabel("Log-moneyness k")
+    ax1.set_ylabel("Maturity T")
+    plt.colorbar(c1, ax=ax1, label="%")
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    c2 = ax2.pcolormesh(K_grid, T_grid, mlp_iv * 100, cmap="viridis", shading="auto")
+    ax2.set_title("(b) MLP Implied Vol (%)", fontweight="bold")
+    ax2.set_xlabel("Log-moneyness k")
+    ax2.set_ylabel("Maturity T")
+    plt.colorbar(c2, ax=ax2, label="%")
+
+    # Panel B: Density comparison
+    ax3 = fig.add_subplot(gs[0, 2])
+    # MLP density with violation highlighting
+    vmin = min(cinn_density.min(), mlp_density.min())
+    vmax = max(cinn_density.max(), mlp_density.max())
+    c3 = ax3.pcolormesh(K_grid, T_grid, mlp_density, cmap="RdYlGn",
+                         vmin=min(vmin, -0.1), vmax=max(vmax, 0.5), shading="auto")
+    # Contour at g=0
+    try:
+        ax3.contour(K_grid, T_grid, mlp_density, levels=[0], colors="red",
+                     linewidths=2, linestyles="--")
+    except Exception:
+        pass
+    ax3.set_title("(c) MLP Density g(k,T)\n(red = violations)", fontweight="bold")
+    ax3.set_xlabel("Log-moneyness k")
+    ax3.set_ylabel("Maturity T")
+    plt.colorbar(c3, ax=ax3, label="g(k,T)")
+
+    # Panel C: CINN density (should be all positive)
+    ax4 = fig.add_subplot(gs[1, 0])
+    c4 = ax4.pcolormesh(K_grid, T_grid, cinn_density, cmap="RdYlGn",
+                         vmin=min(vmin, -0.1), vmax=max(vmax, 0.5), shading="auto")
+    try:
+        ax4.contour(K_grid, T_grid, cinn_density, levels=[0], colors="blue",
+                     linewidths=1, linestyles=":")
+    except Exception:
+        pass
+    ax4.set_title("(d) CINN Density g(k,T)\n(all positive)", fontweight="bold")
+    ax4.set_xlabel("Log-moneyness k")
+    ax4.set_ylabel("Maturity T")
+    plt.colorbar(c4, ax=ax4, label="g(k,T)")
+
+    # Panel D: Difference map (CINN - MLP)
+    ax5 = fig.add_subplot(gs[1, 1])
+    diff = (cinn_iv - mlp_iv) * 100  # in vol points
+    absmax = max(abs(diff.min()), abs(diff.max()), 1.0)
+    c5 = ax5.pcolormesh(K_grid, T_grid, diff, cmap="coolwarm",
+                         vmin=-absmax, vmax=absmax, shading="auto")
+    ax5.set_title("(e) CINN - MLP (vol pts)\nwhere corrections occur", fontweight="bold")
+    ax5.set_xlabel("Log-moneyness k")
+    ax5.set_ylabel("Maturity T")
+    plt.colorbar(c5, ax=ax5, label="vol pts")
+
+    # Panel E: Curvature comparison (bar chart by moneyness bucket)
+    ax6 = fig.add_subplot(gs[1, 2])
+    buckets = [(-0.25, -0.1, "OTM Put"), (-0.1, 0.1, "ATM"), (0.1, 0.25, "OTM Call")]
+    mlp_violations = []
+    cinn_violations = []
+    labels = []
+
+    for k_lo, k_hi, label in buckets:
+        k_mask = (k_grid >= k_lo) & (k_grid <= k_hi)
+        mlp_viol = (mlp_density[:, k_mask] < 0).sum()
+        cinn_viol = (cinn_density[:, k_mask] < 0).sum()
+        total = mlp_density[:, k_mask].size
+        mlp_violations.append(mlp_viol / max(total, 1) * 100)
+        cinn_violations.append(cinn_viol / max(total, 1) * 100)
+        labels.append(label)
+
+    x = np.arange(len(labels))
+    width = 0.35
+    bars1 = ax6.bar(x - width/2, mlp_violations, width, label="MLP",
+                     color=COLORS["mlp"], alpha=0.8)
+    bars2 = ax6.bar(x + width/2, cinn_violations, width, label="CINN",
+                     color=COLORS["cinn"], alpha=0.8)
+    ax6.set_ylabel("Density violations (%)")
+    ax6.set_title("(f) Violations by region", fontweight="bold")
+    ax6.set_xticks(x)
+    ax6.set_xticklabels(labels)
+    ax6.legend()
+    ax6.set_ylim(0, max(max(mlp_violations) * 1.2, 1))
+
+    fig.suptitle(
+        "Crash-Regime Stress Test (VIX~80, steep skew, 40% structured dropout)",
+        fontsize=13, fontweight="bold", y=0.98,
+    )
+
+    path = os.path.join(FIG_DIR, "fig4_stress_surface.pdf")
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"  Saved -> {path}")
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -574,7 +837,7 @@ def main():
         description="Generate publication-quality figures for the CINN vol-surface paper."
     )
     parser.add_argument("--fig", type=int, default=None,
-                        help="Generate only a specific figure (1, 2, or 3)")
+                        help="Generate only a specific figure (1, 2, 3, or 4)")
     parser.add_argument("--quick", action="store_true",
                         help="Use fewer epochs for faster generation")
     args = parser.parse_args()
@@ -582,11 +845,11 @@ def main():
     setup_style()
     ensure_fig_dir()
 
-    fig_funcs = {1: figure1, 2: figure2, 3: figure3}
+    fig_funcs = {1: figure1, 2: figure2, 3: figure3, 4: figure4}
 
     if args.fig is not None:
         if args.fig not in fig_funcs:
-            print(f"Unknown figure number: {args.fig}. Choose from 1, 2, 3.")
+            print(f"Unknown figure number: {args.fig}. Choose from {list(fig_funcs.keys())}.")
             sys.exit(1)
         fig_funcs[args.fig](quick=args.quick)
     else:

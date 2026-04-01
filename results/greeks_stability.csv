@@ -1,0 +1,4 @@
+Model,Curvature Var,Lipschitz,Smoothness
+CINN,0.000069,0.0687,0.456140
+MLP,0.000001,0.0093,0.060866
+MLP-Soft,0.000001,0.0056,0.031417

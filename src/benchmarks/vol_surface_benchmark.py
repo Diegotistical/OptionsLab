@@ -243,6 +243,65 @@ class SABRWrapper(ModelWrapper):
         }
 
 
+class ESSVIWrapper(ModelWrapper):
+    """Wrapper for eSSVI model with multi-start calibration."""
+
+    name = "eSSVI"
+
+    def __init__(self, n_restarts: int = 10):
+        self.model = None
+        self.n_restarts = n_restarts
+        self._T_slices = None
+        self._smile_data = None
+
+    def calibrate_surface(
+        self,
+        T_slices: np.ndarray,
+        smile_data: list,
+    ) -> None:
+        """Calibrate eSSVI jointly across all slices."""
+        from src.volatility_surface.models.svi import calibrate_essvi
+
+        self.model = calibrate_essvi(T_slices, smile_data, n_restarts=self.n_restarts)
+        self._T_slices = T_slices
+
+    def calibrate(
+        self,
+        log_strikes: np.ndarray,
+        market_vols: np.ndarray,
+        T: float,
+        **kwargs,
+    ) -> None:
+        """Per-slice fallback: stores data for later joint calibration."""
+        if self._smile_data is None:
+            self._smile_data = []
+            self._T_slices_list = []
+        self._smile_data.append((log_strikes.copy(), market_vols.copy()))
+        self._T_slices_list.append(T)
+
+    def finalize_calibration(self) -> None:
+        """Joint calibration after all slices have been added."""
+        if self._smile_data is not None and len(self._smile_data) > 0:
+            T_arr = np.array(self._T_slices_list)
+            self.calibrate_surface(T_arr, self._smile_data)
+
+    def predict(self, log_strikes: np.ndarray, T: float) -> np.ndarray:
+        if self.model is None:
+            raise RuntimeError("Model not calibrated")
+        return self.model.smile(log_strikes, T)
+
+    def get_params(self) -> Dict[str, float]:
+        if self.model is None:
+            return {}
+        return {
+            "rho": self.model.rho,
+            "eta": self.model.eta,
+            "gamma": self.model.gamma,
+            "a_atm": self.model.a_atm,
+            "b_atm": self.model.b_atm,
+        }
+
+
 class MLPWrapper(ModelWrapper):
     """Wrapper for MLP volatility model using sklearn."""
 
@@ -444,6 +503,7 @@ class VolSurfaceBenchmark:
 
     AVAILABLE_MODELS = {
         "svi": SVIWrapper,
+        "essvi": ESSVIWrapper,
         "sabr": SABRWrapper,
         "mlp": MLPWrapper,
         "rf": RFWrapper,

@@ -1,0 +1,4 @@
+Test,Avg Violation Rate (%),Max EPP (bps),N Surfaces,Samples/Surface
+Density (off-grid),0.0,N/A,10,10000
+Butterfly (random),0.0,0.0,10,5000
+Calendar (random),0.0,0.0,10,5000

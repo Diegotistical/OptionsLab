@@ -239,6 +239,234 @@ class SSVIModel:
         return np.sqrt(max(w, 1e-10) / T)
 
 
+@dataclass
+class ESSVIModel:
+    """
+    Extended SSVI (eSSVI) for arbitrage-free volatility surfaces.
+
+    Extends SSVI with power-law ATM term structure and explicit
+    Roger-Lee bound enforcement (Hendriks & Martini 2019).
+
+    Parameterization:
+        w(k, T) = (theta(T)/2) * (1 + rho*phi(theta)*k
+                   + sqrt((phi(theta)*k + rho)^2 + 1 - rho^2))
+        theta(T) = a_atm * T^b_atm   (power-law ATM total variance)
+        phi(theta) = eta / theta^gamma
+
+    Roger-Lee enforcement: eta * (1 + |rho|) < 2
+    """
+
+    rho: float
+    eta: float
+    gamma: float
+    a_atm: float  # ATM total variance scale
+    b_atm: float  # ATM total variance power
+
+    def __post_init__(self):
+        if not -1 < self.rho < 1:
+            raise ValueError("rho must be in (-1, 1)")
+        if self.eta <= 0:
+            raise ValueError("eta must be positive")
+        if not 0 <= self.gamma <= 1:
+            raise ValueError("gamma must be in [0, 1]")
+        if self.a_atm <= 0:
+            raise ValueError("a_atm must be positive")
+        if self.b_atm <= 0 or self.b_atm > 2:
+            raise ValueError("b_atm must be in (0, 2]")
+
+    def theta(self, T: float) -> float:
+        """Power-law ATM total variance."""
+        if T <= 0:
+            return 1e-10
+        return self.a_atm * T ** self.b_atm
+
+    def phi(self, theta_val: float) -> float:
+        """Correlation function."""
+        if theta_val <= 0:
+            return 1.0
+        return self.eta / (theta_val ** self.gamma)
+
+    def total_variance(self, k: float, T: float) -> float:
+        """Compute eSSVI total variance w(k, T)."""
+        th = self.theta(T)
+        ph = self.phi(th)
+        return (th / 2) * (
+            1
+            + self.rho * ph * k
+            + np.sqrt((ph * k + self.rho) ** 2 + 1 - self.rho ** 2)
+        )
+
+    def implied_vol(self, k: float, T: float) -> float:
+        """Compute implied volatility."""
+        w = self.total_variance(k, T)
+        return np.sqrt(max(w, 1e-10) / max(T, 1e-10))
+
+    def smile(self, log_strikes: np.ndarray, T: float) -> np.ndarray:
+        """Compute implied volatility smile for a maturity slice."""
+        return np.array([self.implied_vol(k, T) for k in log_strikes])
+
+    def roger_lee_check(self) -> bool:
+        """Verify Roger-Lee bound: eta * (1 + |rho|) < 2."""
+        return self.eta * (1 + abs(self.rho)) < 2.0
+
+
+def calibrate_essvi(
+    T_slices: np.ndarray,
+    smile_data: list,
+    n_restarts: int = 10,
+) -> ESSVIModel:
+    """
+    Calibrate eSSVI model with multi-start joint optimization.
+
+    Uses maturity-weighted MSE to prevent short-dated slices from dominating,
+    and differential evolution for global search followed by L-BFGS-B refinement.
+
+    Args:
+        T_slices: Array of maturities.
+        smile_data: List of (log_strikes, market_vols) tuples per slice.
+        n_restarts: Number of random restarts for L-BFGS-B refinement.
+
+    Returns:
+        Best-fit ESSVIModel.
+    """
+    from scipy.optimize import differential_evolution
+
+    # Step 1: Initialize ATM term structure via power-law regression
+    atm_vols = []
+    for i, (log_strikes, market_vols) in enumerate(smile_data):
+        atm_idx = np.argmin(np.abs(log_strikes))
+        atm_vols.append(market_vols[atm_idx])
+    atm_vols = np.array(atm_vols)
+    atm_total_var = atm_vols ** 2 * T_slices
+
+    # Power-law fit: log(theta) = log(a) + b*log(T)
+    valid = (T_slices > 0) & (atm_total_var > 0)
+    if valid.sum() >= 2:
+        log_T = np.log(T_slices[valid])
+        log_theta = np.log(atm_total_var[valid])
+        b_init, log_a_init = np.polyfit(log_T, log_theta, 1)
+        a_init = np.exp(log_a_init)
+        b_init = np.clip(b_init, 0.3, 1.5)
+        a_init = np.clip(a_init, 0.005, 0.5)
+    else:
+        a_init, b_init = 0.04, 1.0
+
+    # Maturity weights: sqrt(T) to prevent short-dated domination
+    T_weights = {T: np.sqrt(T) for T in T_slices}
+
+    def objective(params):
+        rho, eta, gamma, a_atm, b_atm = params
+
+        # Roger-Lee bound
+        if eta * (1 + abs(rho)) >= 2.0:
+            return 1e10
+
+        try:
+            total_error = 0.0
+            total_weight = 0.0
+            for i, T in enumerate(T_slices):
+                log_strikes, market_vols = smile_data[i]
+                theta_val = a_atm * T ** b_atm
+                if theta_val <= 0:
+                    return 1e10
+                phi_val = eta / (theta_val ** gamma)
+                w = T_weights[T]
+
+                for j, k in enumerate(log_strikes):
+                    inner = (phi_val * k + rho) ** 2 + 1 - rho ** 2
+                    if inner < 0:
+                        return 1e10
+                    w_model = (theta_val / 2) * (
+                        1 + rho * phi_val * k + np.sqrt(inner)
+                    )
+                    w_market = market_vols[j] ** 2 * T
+                    total_error += w * (w_model - w_market) ** 2
+                    total_weight += w
+
+            return total_error / max(total_weight, 1e-10)
+        except (ValueError, FloatingPointError, OverflowError):
+            return 1e10
+
+    bounds_de = [
+        (-0.99, 0.99),   # rho
+        (0.01, 3.0),     # eta
+        (0.01, 0.99),    # gamma
+        (0.001, 0.5),    # a_atm
+        (0.1, 1.8),      # b_atm
+    ]
+
+    bounds_lbfgs = [
+        (-0.99, 0.99),
+        (0.01, 3.0),
+        (0.01, 0.99),
+        (0.001, 0.5),
+        (0.1, 1.8),
+    ]
+
+    # Phase 1: Differential evolution (global search)
+    try:
+        de_result = differential_evolution(
+            objective,
+            bounds_de,
+            seed=42,
+            maxiter=200,
+            tol=1e-10,
+            polish=False,
+            popsize=15,
+        )
+        best_cost = de_result.fun
+        best_result = de_result.x
+    except Exception:
+        best_cost = 1e10
+        best_result = None
+
+    # Phase 2: Multi-start L-BFGS-B refinement
+    rng = np.random.default_rng(42)
+    initial_guesses = []
+
+    if best_result is not None:
+        initial_guesses.append(list(best_result))
+
+    initial_guesses.extend([
+        [-0.3, 0.5, 0.5, a_init, b_init],
+        [-0.5, 0.3, 0.4, a_init, b_init],
+        [-0.7, 1.0, 0.3, a_init, b_init],
+        [-0.4, 0.8, 0.6, a_init, b_init],
+    ])
+    for _ in range(n_restarts - len(initial_guesses)):
+        initial_guesses.append([
+            rng.uniform(-0.9, 0.3),
+            rng.uniform(0.1, 2.0),
+            rng.uniform(0.1, 0.9),
+            a_init * rng.uniform(0.3, 3.0),
+            b_init * rng.uniform(0.5, 1.5),
+        ])
+
+    for x0 in initial_guesses:
+        x0 = [np.clip(x0[i], bounds_lbfgs[i][0] + 0.01, bounds_lbfgs[i][1] - 0.01)
+              for i in range(5)]
+
+        try:
+            result = minimize(
+                objective,
+                x0,
+                method="L-BFGS-B",
+                bounds=bounds_lbfgs,
+                options={"maxiter": 1000, "ftol": 1e-14},
+            )
+            if result.fun < best_cost:
+                best_cost = result.fun
+                best_result = result.x
+        except Exception:
+            continue
+
+    if best_result is None:
+        raise ValueError("eSSVI calibration failed on all restarts")
+
+    rho, eta, gamma, a_atm, b_atm = best_result
+    return ESSVIModel(rho, eta, gamma, a_atm, b_atm)
+
+
 def calibrate_svi(
     log_strikes: np.ndarray,
     market_vols: np.ndarray,
