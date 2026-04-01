@@ -656,7 +656,7 @@ The Roger-Lee bound (A4) requires $\totalvar(\logstrike, \maturity) / |\logstrik
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.95\textwidth]{figures/fig1_epp_vs_dropout.pdf}
+\includegraphics[width=0.95\textwidth]{fig1_epp_vs_dropout.pdf}
 \caption{\textbf{EPP vs.\ Strike Dropout.} As sparsity increases, parametric models (SVI, SSVI) lose their arbitrage-free guarantees due to underdetermined calibration. Unconstrained MLPs produce increasing arbitrage. CINN (solid black) maintains EPP $<$ 0.1 bps up to 60\% dropout.}
 \label{fig:epp_dropout}
 \end{figure}
@@ -691,14 +691,14 @@ Under full data, CINN achieves 4.3\% higher RMSE than unconstrained MLP (19.4 vs
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=\textwidth]{figures/fig2_surface_comparison.pdf}
+\includegraphics[width=\textwidth]{fig2_surface_comparison.pdf}
 \caption{\textbf{Volatility Surfaces Under Sparsity.} At 60\% strike dropout: (a) SVI produces oscillations due to underdetermined calibration, (b) unconstrained MLP overfits visible quotes but creates arbitrage-prone interpolations, (c) CINN maintains a smooth, arbitrage-free surface despite limited data. Black dots indicate observed market quotes (8 per slice).}
 \label{fig:surface_comparison}
 \end{figure}
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.95\textwidth]{figures/fig3_density_heatmaps.pdf}
+\includegraphics[width=0.95\textwidth]{fig3_density_heatmaps.pdf}
 \caption{\textbf{Density Positivity.} Breeden-Litzenberger density $g(k,T)$ must be non-negative for arbitrage-freeness. (a) Unconstrained MLP violates this in regions shown in red. (b) CINN satisfies $g \geq 0$ everywhere (blue/green). Black contour marks $g = 0$. Red regions correspond to exploitable butterfly arbitrage.}
 \label{fig:density_heatmap}
 \end{figure}
@@ -767,7 +767,7 @@ Soft-penalty EPP increases 42\% during stress. CINN maintains zero arbitrage reg
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=\textwidth]{figures/fig4_stress_surface.pdf}
+\includegraphics[width=\textwidth]{fig4_stress_surface.pdf}
 \caption{\textbf{Crash-Regime Stress Test.} Synthetic surface with parameters calibrated to 2020-03-16 market conditions (VIX $\approx$ 82, steep put skew, compressed short-term structure), 40\% structured dropout. (a--b) CINN vs MLP implied volatility surfaces. (c) MLP density $g(k,T)$ showing violation regions (red, $g < 0$). (d) CINN density (all positive). (e) Difference map showing where constraint corrections occur. (f) Density violations by moneyness region. While not identical to the actual 2020-03-16 surface (OptionMetrics data cannot be redistributed), the regime characteristics replicate conditions under which arbitrage violations are most severe.}
 \label{fig:stress_surface}
 \end{figure}
