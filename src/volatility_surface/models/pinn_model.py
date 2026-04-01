@@ -514,6 +514,11 @@ class PINNVolatilityModel(VolatilityModelBase):
         use_warmup: bool = True,
         use_ema_norm: bool = True,
         squared_hinge: bool = True,
+        # Early stopping
+        early_stopping: bool = False,
+        early_stop_patience: int = 20,
+        early_stop_rmse_tol: float = 1e-5,
+        early_stop_epp_threshold: float = 1e-4,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for PINNVolatilityModel")
@@ -539,6 +544,11 @@ class PINNVolatilityModel(VolatilityModelBase):
         self.use_warmup = use_warmup
         self.use_ema_norm = use_ema_norm
         self.squared_hinge = squared_hinge
+        # Early stopping
+        self.early_stopping = early_stopping
+        self.early_stop_patience = early_stop_patience
+        self.early_stop_rmse_tol = early_stop_rmse_tol
+        self.early_stop_epp_threshold = early_stop_epp_threshold
 
         # Set device - prefer AMD DirectML if available
         if device is None:
@@ -721,6 +731,31 @@ class PINNVolatilityModel(VolatilityModelBase):
             if epoch_losses["total"] < best_loss:
                 best_loss = epoch_losses["total"]
 
+            # Early stopping: stop when RMSE improvement < tol over patience
+            # epochs AND constraint violations are below threshold
+            if self.early_stopping and epoch > (300 if use_warmup else 100):
+                current_mse_avg = epoch_losses["mse"] / n_batches
+                constraint_sum = (
+                    epoch_losses["calendar"] + epoch_losses["butterfly"]
+                ) / n_batches
+
+                if not hasattr(self, "_es_best_mse"):
+                    self._es_best_mse = current_mse_avg
+                    self._es_patience_counter = 0
+
+                if current_mse_avg < self._es_best_mse - self.early_stop_rmse_tol:
+                    self._es_best_mse = current_mse_avg
+                    self._es_patience_counter = 0
+                else:
+                    self._es_patience_counter += 1
+
+                if (
+                    self._es_patience_counter >= self.early_stop_patience
+                    and constraint_sum < self.early_stop_epp_threshold
+                ):
+                    epoch_record["early_stopped"] = True
+                    break
+
             # Constraint-aware checkpoint: save best model that satisfies constraints
             checkpoint_start = 100 if not use_warmup else 300
             if epoch >= checkpoint_start and epoch % 50 == 0:
@@ -743,12 +778,14 @@ class PINNVolatilityModel(VolatilityModelBase):
         self._is_trained = True
 
         # Compute final metrics
+        actual_epochs = len(self.training_history)
         return {
             "final_mse": self.training_history[-1]["mse"],
             "final_calendar_penalty": self.training_history[-1]["calendar"],
             "final_butterfly_penalty": self.training_history[-1]["butterfly"],
             "final_loss": self.training_history[-1]["total"],
-            "epochs_trained": self.epochs,
+            "epochs_trained": actual_epochs,
+            "early_stopped": actual_epochs < self.epochs,
         }
 
     def _predict_impl(self, df: pd.DataFrame) -> np.ndarray:
