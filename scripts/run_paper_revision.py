@@ -403,6 +403,7 @@ def run_icnn_benchmark(n_surfaces: int = 50, seed: int = 42) -> pd.DataFrame:
                     model = ICNNVolatilityModel(
                         hidden_layers=[64, 32, 16],
                         lambda_calendar=5.0,
+                        lambda_butterfly=1.0,
                         lambda_wing=1.0,
                         epochs=300,
                         lr=3e-3,

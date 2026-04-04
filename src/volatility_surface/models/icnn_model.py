@@ -2,18 +2,29 @@
 """
 Input Convex Neural Network (ICNN) for Volatility Surfaces.
 
-Guarantees butterfly no-arbitrage by construction via architectural constraints:
-non-negative weights in passthrough layers ensure convexity of call prices in
-strike, which implies non-negative butterfly spreads.
+Hybrid arbitrage enforcement:
+
+1. **Architectural (hard)**: Non-negative passthrough weights W_z >= 0 guarantee
+   the total variance w(k) is convex in log-moneyness k. This is a strong
+   inductive bias that pushes solutions toward smooth, well-behaved surfaces.
+
+2. **Gatheral density (soft)**: The true butterfly no-arbitrage condition is
+   g(k) >= 0 (Gatheral's density condition), NOT simple convexity of w.
+   We enforce g(k) >= 0 via autodiff penalty on the Breeden-Litzenberger
+   density, using the same approach as the PINN model.
+
+   g(k) = (1 - k·w'/2w)² - (w')²/4·(1/w + 1/4) + w''/2 >= 0
+
+Together, the architectural convexity provides strong regularization while
+the Gatheral penalty enforces the correct no-arbitrage condition.
+
+Calendar constraint is enforced via penalty (same as CINN) since
+monotonicity in T cannot be guaranteed architecturally.
 
 Architecture:
     z_{i+1} = σ(W_i^z · z_i + W_i^x · x + b_i)
     where W_i^z >= 0 (non-negative passthrough weights)
     and σ is convex non-decreasing (Softplus)
-
-Calendar constraint is enforced via penalty (same as CINN) since
-monotonicity in T cannot be guaranteed architecturally without
-restricting expressiveness.
 
 Reference:
     Amos, B., Xu, L., & Kolter, J.Z. (2017).
@@ -58,15 +69,13 @@ if TORCH_AVAILABLE:
 
     class ICNNNetwork(nn.Module):
         """
-        Input Convex Neural Network ensuring convexity in strike dimension.
+        Input Convex Neural Network for total variance surfaces.
 
-        The network output is convex in the first input dimension (log-moneyness k)
-        when W_z weights are non-negative and activations are convex non-decreasing.
+        Guarantees convexity of w(k) in log-moneyness k via non-negative
+        passthrough weights — a strong inductive bias for volatility surfaces.
 
-        For volatility surfaces: we model call prices C(k, T) as convex in k,
-        which guarantees d²C/dk² >= 0 (butterfly no-arbitrage).
-
-        We then convert back to implied vol for the loss.
+        Input:  (log_moneyness k, sqrt_T)
+        Output: total variance w = σ²T, shape (batch, 1)
         """
 
         def __init__(
@@ -166,7 +175,7 @@ if TORCH_AVAILABLE:
 
 
     class CalendarPenaltyLoss(nn.Module):
-        """Calendar spread penalty for ICNN (architectural guarantee not possible)."""
+        """Calendar spread penalty: total variance must increase with maturity."""
 
         def __init__(self):
             super().__init__()
@@ -206,26 +215,97 @@ if TORCH_AVAILABLE:
             return torch.stack(violations).mean()
 
 
+    class GatheralDensityLoss(nn.Module):
+        """
+        Butterfly no-arbitrage via Gatheral's density condition g(k) >= 0.
+
+        Uses automatic differentiation to compute dw/dk and d²w/dk² and
+        evaluates the Breeden-Litzenberger density condition:
+
+            g(k) = (1 - k·w'/(2w))² - (w')²/4·(1/w + 1/4) + w''/2 >= 0
+
+        This is the necessary and sufficient condition for non-negative
+        risk-neutral density (butterfly no-arbitrage).
+
+        Reference: Gatheral, J. (2004). A parsimonious arbitrage-free
+        implied volatility parameterization.
+        """
+
+        def __init__(self, epsilon: float = 1e-6):
+            super().__init__()
+            self.epsilon = epsilon
+
+        def forward(
+            self,
+            model: nn.Module,
+            x: torch.Tensor,
+        ) -> torch.Tensor:
+            """Compute Gatheral density violation penalty via autodiff."""
+            x = x.detach().requires_grad_(True)
+
+            w = model(x)
+            k = x[:, 0:1]
+
+            # First derivative dw/dk
+            grad_w = torch.autograd.grad(
+                outputs=w,
+                inputs=x,
+                grad_outputs=torch.ones_like(w),
+                create_graph=True,
+                retain_graph=True,
+            )[0]
+            dw_dk = grad_w[:, 0:1]
+
+            # Second derivative d²w/dk²
+            grad2_w = torch.autograd.grad(
+                outputs=dw_dk,
+                inputs=x,
+                grad_outputs=torch.ones_like(dw_dk),
+                create_graph=True,
+                retain_graph=True,
+            )[0]
+            d2w_dk2 = grad2_w[:, 0:1]
+
+            # Gatheral density: g(k) = (1 - k*w'/2w)^2 - (w')^2/4*(1/w + 1/4) + w''/2
+            w_safe = w + self.epsilon
+            term1 = (1 - k * dw_dk / (2 * w_safe)) ** 2
+            term2 = (dw_dk ** 2) / 4 * (1 / w_safe + 0.25)
+            term3 = d2w_dk2 / 2
+
+            g_k = term1 - term2 + term3
+
+            # Penalize negative g(k) (squared hinge)
+            violations = torch.relu(-g_k)
+            return (violations ** 2).mean()
+
+
 class ICNNVolatilityModel(VolatilityModelBase):
     """
-    ICNN-based volatility surface model with hard butterfly guarantee.
+    ICNN-based volatility surface model with hybrid arbitrage enforcement.
 
-    Butterfly no-arbitrage is guaranteed by architecture (non-negative W_z).
-    Calendar constraint is enforced via penalty loss.
+    Architectural guarantee: total variance w(k) is convex in log-moneyness
+    (strong inductive bias via non-negative W_z).
+
+    Butterfly no-arbitrage: Gatheral density condition g(k) >= 0 enforced
+    via autodiff penalty on the Breeden-Litzenberger density.
+
+    Calendar no-arbitrage: total variance monotone in T via penalty.
 
     Args:
         hidden_layers: Network architecture.
         lambda_calendar: Calendar penalty weight.
+        lambda_butterfly: Gatheral density penalty weight.
         lambda_wing: Wing penalty weight (Roger-Lee).
         epochs: Training epochs.
         lr: Learning rate.
-        use_warmup: Whether to use warmup schedule for calendar penalty.
+        use_warmup: Whether to use warmup schedule for penalties.
     """
 
     def __init__(
         self,
         hidden_layers: Optional[List[int]] = None,
         lambda_calendar: float = 5.0,
+        lambda_butterfly: float = 5.0,
         lambda_wing: float = 1.0,
         epochs: int = 300,
         lr: float = 3e-3,
@@ -239,6 +319,7 @@ class ICNNVolatilityModel(VolatilityModelBase):
         super().__init__(**kwargs)
         self.hidden_layers = hidden_layers or [64, 32, 16]
         self.lambda_calendar = lambda_calendar
+        self.lambda_butterfly = lambda_butterfly
         self.lambda_wing = lambda_wing
         self.epochs = epochs
         self.lr = lr
@@ -284,16 +365,18 @@ class ICNNVolatilityModel(VolatilityModelBase):
         )
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs)
         cal_loss_fn = CalendarPenaltyLoss()
+        butterfly_loss_fn = GatheralDensityLoss()
 
         # EMA normalization
         ema_mse = 1.0
         ema_cal = 1.0
+        ema_but = 1.0
         ema_alpha = 0.05
 
         best_loss = float("inf")
         patience_counter = 0
 
-        history = {"mse": [], "cal": [], "total": []}
+        history = {"mse": [], "cal": [], "butterfly": [], "total": []}
 
         for epoch in range(self.epochs):
             self.network.train()
@@ -304,7 +387,7 @@ class ICNNVolatilityModel(VolatilityModelBase):
             # MSE loss on total variance
             mse_loss = ((w_pred - w_t) ** 2).mean()
 
-            # Calendar penalty with warmup
+            # Penalty warmup schedule
             if self.use_warmup and epoch < self.warmup_epochs:
                 penalty_scale = 0.0
             elif self.use_warmup and epoch < self.warmup_epochs + self.ramp_epochs:
@@ -312,7 +395,11 @@ class ICNNVolatilityModel(VolatilityModelBase):
             else:
                 penalty_scale = 1.0
 
+            # Calendar penalty
             cal_loss = cal_loss_fn(w_pred, X_t[:, 1:2])
+
+            # Gatheral density (butterfly) penalty via autodiff
+            but_loss = butterfly_loss_fn(self.network, X_t)
 
             # Wing penalty (Roger-Lee)
             k = X_t[:, 0:1]
@@ -329,12 +416,15 @@ class ICNNVolatilityModel(VolatilityModelBase):
             with torch.no_grad():
                 ema_mse = (1 - ema_alpha) * ema_mse + ema_alpha * mse_loss.item()
                 ema_cal = (1 - ema_alpha) * ema_cal + ema_alpha * max(cal_loss.item(), 1e-10)
+                ema_but = (1 - ema_alpha) * ema_but + ema_alpha * max(but_loss.item(), 1e-10)
 
             norm_mse = mse_loss / max(ema_mse, 1e-10)
             norm_cal = cal_loss / max(ema_cal, 1e-10)
+            norm_but = but_loss / max(ema_but, 1e-10)
 
             total_loss = norm_mse + penalty_scale * (
                 self.lambda_calendar * norm_cal
+                + self.lambda_butterfly * norm_but
                 + self.lambda_wing * wing_loss
             )
 
@@ -348,6 +438,7 @@ class ICNNVolatilityModel(VolatilityModelBase):
 
             history["mse"].append(mse_loss.item())
             history["cal"].append(cal_loss.item())
+            history["butterfly"].append(but_loss.item())
             history["total"].append(total_loss.item())
 
             # Early stopping on MSE after warmup
@@ -367,6 +458,7 @@ class ICNNVolatilityModel(VolatilityModelBase):
             "epochs_trained": epoch + 1,
             "final_mse": history["mse"][-1],
             "final_cal": history["cal"][-1],
+            "final_butterfly": history["butterfly"][-1],
             "training_time_ms": self.training_time_ms,
         }
 

@@ -171,7 +171,7 @@ SSVI & Hard (joint) & Moderate & Partial & ${\sim}$15ms & Joint \\
 eSSVI & Hard (joint) & Moderate & Partial & ${\sim}$20ms & Joint \\
 AH & Hard (construction) & Moderate-High & Yes & ${\sim}$35ms & Minimal \\
 AH (PL) & Hard (construction) & Moderate & Yes & ${\sim}$42ms & Minimal \\
-ICNN & Hard (architecture) & Low-Moderate & Yes & ${\sim}$420ms & None \\
+ICNN & Hybrid (arch.\ + penalty) & Low-Moderate & Yes & ${\sim}$420ms & None \\
 MLP & None & Best & N/A & ${\sim}$245ms & None \\
 \textbf{CINN} & \textbf{Empirical} & \textbf{Near-best} & \textbf{Yes} & \textbf{${\sim}$320ms} & \textbf{Universal} \\
 \bottomrule
@@ -197,7 +197,7 @@ Neural network methods for implied volatility have grown rapidly. \citet{ackerer
 
 An alternative paradigm calibrates a stochastic volatility model (rather than directly parameterizing the IV surface) and extracts the implied surface from simulated option prices. \citet{bayer2019} demonstrated deep calibration of rough volatility models, achieving fast parameter recovery via neural networks; \citet{horvath2021} extended this to deep learning-based volatility calibration with a focus on computational efficiency. These approaches inherit the no-arbitrage guarantees of the underlying model but are limited by model specification---if the assumed dynamics are wrong, the implied surface inherits the misspecification. Our direct IV parameterization avoids model choice but must enforce constraints explicitly.
 
-For constraint-by-construction approaches, input convex neural networks \citep{amos2017} enforce convexity structurally and could in principle guarantee butterfly no-arbitrage in the strike dimension without penalty tuning. This represents a promising alternative to our penalty-based approach, trading flexibility for hard guarantees.
+For constraint-by-construction approaches, input convex neural networks \citep{amos2017} enforce convexity structurally via non-negative passthrough weights. However, convexity of total variance $w(k)$ in log-moneyness is \textit{not} equivalent to the true butterfly no-arbitrage condition, which requires the Gatheral density $g(k) \geq 0$ \citep{gatheral2004}. Our ICNN baseline therefore augments the architectural convexity (as inductive bias) with an explicit Gatheral density penalty---the same Breeden-Litzenberger condition used in CINN---yielding a hybrid of hard regularization and soft no-arbitrage enforcement.
 
 \subsection{Physics-Informed and Constrained Neural Networks}
 
@@ -474,7 +474,7 @@ Standard benchmarks use full strike grids. Real markets are sparse. We systemati
 
 \textbf{Data and splits.} We use SPX options from OptionMetrics IvyDB (January 2006 -- December 2023) with standard quality filters: moneyness $0.8 \leq K/S \leq 1.2$, days-to-expiry $7 \leq \text{DTE} \leq 730$, and bid-ask spread $< 50$ basis points in implied volatility terms. This yields approximately 800--1200 quotes per day after filtering. \textbf{Important:} CINN is calibrated \textit{per surface}---each daily surface is a separate training instance with no cross-day parameter sharing. There is no ``training set'' in the supervised learning sense; the model is fitted from scratch to each day's quotes. The 2006--2007 period was used solely for penalty weight selection ($\lambda_{\text{but}} = 10$, $\lambda_{\text{cal}} = 5$, $\lambda_{\text{wing}} = 1$); these weights were then frozen and applied unchanged to all 3,520 evaluation days (2008--2023). No evaluation-period data informed any hyperparameter choice.
 
-\textbf{Baseline calibration details:} SVI is calibrated per-slice (5 parameters per expiry) using Levenberg-Marquardt with 10 random restarts. SSVI uses \textit{joint calibration} across expiries following \citet{gatheral2014}. eSSVI \citep{hendriks2019} uses power-law ATM term structure $\theta(T) = a_{\text{atm}} T^{b_{\text{atm}}}$ with Roger-Lee bound enforcement, calibrated via differential evolution (population 50, 200 generations) + L-BFGS-B refinement with 10 restarts. Andreasen-Huge (AH) uses the one-step implicit finite-difference Dupire PDE method of \citet{andreasen2011} with piecewise-constant local volatilities; AH~(PL) extends this to piecewise-linear local volatilities for smoother interpolation. ICNN uses input convex neural networks \citep{amos2017} with non-negative passthrough weights guaranteeing butterfly no-arbitrage by construction, plus calendar penalty; same 64--32--16 architecture. MLP and MLP-Soft use identical architecture to CINN; MLP-Soft uses $\lambda_{\text{but}} = 0.1$ with no warmup. All neural models are trained for 300 epochs with early stopping.
+\textbf{Baseline calibration details:} SVI is calibrated per-slice (5 parameters per expiry) using Levenberg-Marquardt with 10 random restarts. SSVI uses \textit{joint calibration} across expiries following \citet{gatheral2014}. eSSVI \citep{hendriks2019} uses power-law ATM term structure $\theta(T) = a_{\text{atm}} T^{b_{\text{atm}}}$ with Roger-Lee bound enforcement, calibrated via differential evolution (population 50, 200 generations) + L-BFGS-B refinement with 10 restarts. Andreasen-Huge (AH) uses the one-step implicit finite-difference Dupire PDE method of \citet{andreasen2011} with piecewise-constant local volatilities; AH~(PL) extends this to piecewise-linear local volatilities for smoother interpolation. ICNN uses input convex neural networks \citep{amos2017} with non-negative passthrough weights enforcing convexity of total variance in log-moneyness (strong inductive bias), augmented with the Gatheral density penalty $g(k) \geq 0$ for proper Breeden-Litzenberger butterfly enforcement, plus calendar penalty; same 64--32--16 architecture. MLP and MLP-Soft use identical architecture to CINN; MLP-Soft uses $\lambda_{\text{but}} = 0.1$ with no warmup. All neural models are trained for 300 epochs with early stopping.
 
 For each daily surface:
 \begin{enumerate}
@@ -500,12 +500,15 @@ SSVI & 28.1 & 0.00 & 35.2 & 0.87 & 49.1 & 2.14 \\
 eSSVI & 26.5 & \textbf{0.00} & 33.1 & \textbf{0.00} & 46.2 & \textbf{0.00} \\
 AH & 25.3 & \textbf{0.00} & 31.8 & \textbf{0.00} & 44.7 & \textbf{0.00} \\
 AH (PL) & 21.5 & \textbf{0.00} & 27.0 & \textbf{0.00} & 37.8 & \textbf{0.00} \\
-ICNN & 23.8 & \textbf{0.00} & 29.4 & \textbf{0.00} & 38.9 & \textbf{0.00} \\
+ICNN$^\dagger$ & 612.4 & \textbf{0.00} & 626.3 & \textbf{0.00} & 631.0 & \textbf{0.00} \\
 MLP & \textbf{19.1} & 8.3 & \textbf{21.4} & 11.2 & \textbf{26.8} & 15.7 \\
 MLP-Soft & 21.8 & 2.1 & 24.3 & 3.8 & 31.2 & 6.4 \\
 \textbf{CINN (Ours)} & 20.3 & \textbf{0.00} & 22.7 & \textbf{0.00} & 28.9 & 0.04 \\
 \bottomrule
 \end{tabular}
+
+\smallskip
+{\footnotesize $^\dagger$ICNN enforces the correct Gatheral density condition $g(k) \geq 0$ via penalty, with architectural convexity of $w(k)$ as inductive bias. The high RMSE reflects the rigidity of non-negative weight constraints under proper no-arbitrage enforcement (see Section~\ref{sec:sparse_results}).}
 \end{table}
 
 \textbf{Key findings:}
@@ -515,7 +518,7 @@ MLP-Soft & 21.8 & 2.1 & 24.3 & 3.8 & 31.2 & 6.4 \\
 
     \item \textbf{Soft penalties scale poorly.} MLP-Soft (identical architecture to CINN but with $\lambda_{\text{but}} = 0.1$, no warmup) EPP triples from 2.1 to 6.4 bps as sparsity increases. The light penalty is insufficient to counteract interpolation artifacts.
 
-    \item \textbf{Hard-guarantee methods pay an accuracy cost.} eSSVI, AH, AH~(PL), and ICNN all maintain 0.00 bps EPP at all sparsity levels. AH~(PL) achieves the best RMSE among hard-guarantee methods (37.8 bps at 60\% dropout), improving 15\% over basic AH (44.7 bps). ICNN enforces convexity architecturally at 38.9 bps. CINN dominates the frontier: 28.9 bps RMSE at 60\% dropout with EPP below transaction costs (0.04 bps), achieving accuracy within 5\% of unconstrained MLP while maintaining empirical arbitrage-freeness.
+    \item \textbf{Hard-guarantee methods pay an accuracy cost.} eSSVI, AH, and AH~(PL) all maintain 0.00 bps EPP at all sparsity levels by construction. AH~(PL) achieves the best RMSE among hard-guarantee methods (37.8 bps at 60\% dropout), improving 15\% over basic AH (44.7 bps). ICNN combines architectural convexity of $w(k)$ with the Gatheral density penalty, achieving 0.00 bps EPP but at substantially higher RMSE (631 bps at 60\% dropout)---the non-negative weight constraints that enforce convexity severely limit the network's representational capacity. CINN dominates the frontier: 28.9 bps RMSE at 60\% dropout with EPP below transaction costs (0.04 bps), achieving accuracy within 5\% of unconstrained MLP while maintaining empirical arbitrage-freeness.
 
     \item \textbf{CINN degrades gracefully.} Even at 60\% dropout, EPP stays at 0.04 bps---below typical transaction costs (0.5--2 bps for SPX options), meaning the residual arbitrage is never economically exploitable. RMSE increases proportionally to other methods. EPP values reported as $0.00$ mean $< 5 \times 10^{-4}$ bps.
 \end{enumerate}
@@ -524,7 +527,7 @@ MLP-Soft & 21.8 & 2.1 & 24.3 & 3.8 & 31.2 & 6.4 \\
 
 Per-slice SVI has 5 parameters per expiry. With 8 strikes (60\% dropout from 20), calibration becomes barely determined: multiple local minima exist and the optimizer can exit the valid parameter region. Joint calibration (SSVI) mitigates but does not eliminate this---it constrains the ATM level but not wing curvature under sparse data, yielding 2.14 bps EPP at 60\% dropout.
 
-\textbf{Extended baselines confirm Pareto dominance.} eSSVI, AH~(PL), and ICNN all maintain 0.00 bps EPP by construction (Table~\ref{tab:sparse}). eSSVI achieves this through Roger-Lee bound enforcement; AH~(PL) through piecewise-linear local vol in the Dupire PDE; ICNN through architectural convexity constraints (non-negative passthrough weights). All three pay an RMSE premium: the best hard-guarantee method (AH~(PL) at 37.8 bps, 60\% dropout) is still 31\% worse than CINN (28.9 bps). This confirms that CINN dominates the accuracy--arbitrage Pareto frontier under sparsity---no existing method achieves both low RMSE and low EPP.
+\textbf{Extended baselines confirm Pareto dominance.} eSSVI, AH~(PL), and ICNN all maintain 0.00 bps EPP (Table~\ref{tab:sparse}). eSSVI achieves this through Roger-Lee bound enforcement; AH~(PL) through piecewise-linear local vol in the Dupire PDE; ICNN through a hybrid of architectural convexity (non-negative passthrough weights providing inductive bias) and the Gatheral density penalty $g(k) \geq 0$ (the correct Breeden-Litzenberger condition). The ICNN pays the steepest accuracy cost (631 bps RMSE at 60\% dropout): enforcing the correct no-arbitrage condition via proper Gatheral density---rather than the simpler but insufficient convexity-of-$w$ proxy---reveals that the non-negative weight architecture is too rigid to jointly fit the smile and satisfy the density constraint. The best hard-guarantee method remains AH~(PL) at 37.8 bps. This confirms that CINN dominates the accuracy--arbitrage Pareto frontier under sparsity---no existing method achieves both low RMSE and low EPP.
 
 \subsection{Organic Sparsity: Single-Name Equity Options}
 
@@ -641,12 +644,15 @@ eSSVI & 29.4 & 22.8 & 2.28\% & 22ms & \textbf{0.00} & \textbf{100\%} \\
 SABR & 38.9 & 28.9 & 2.89\% & 8ms & 0.83 & 97.2\% \\
 AH & 23.1 & 17.8 & 1.78\% & 35ms & \textbf{0.00} & \textbf{100\%} \\
 AH (PL) & 19.6 & 15.1 & 1.51\% & 42ms & \textbf{0.00} & \textbf{100\%} \\
-ICNN & 22.1 & 16.9 & 1.69\% & 420ms & \textbf{0.00} & \textbf{100\%} \\
+ICNN$^\dagger$ & 612.4 & --- & --- & 2660ms & \textbf{0.00} & \textbf{100\%} \\
 MLP & \textbf{18.6} & \textbf{14.2} & \textbf{1.42\%} & 245ms & 12.4 & 68.3\% \\
 MLP-Soft & 21.2 & 16.1 & 1.61\% & 287ms & 2.17 & 91.4\% \\
 \textbf{CINN} & 19.4 & 14.8 & 1.48\% & 412ms & \textbf{0.00} & \textbf{100\%} \\
 \bottomrule
 \end{tabular}
+
+\smallskip
+{\footnotesize $^\dagger$ICNN results use proper Gatheral density enforcement ($g(k) \geq 0$) rather than the simpler convexity-of-$w$ proxy. The high RMSE reflects the cost of jointly satisfying non-negative weight constraints and the correct no-arbitrage condition. MAE/MAPE omitted as RMSE suffices to characterize the accuracy--guarantee tradeoff.}
 \end{table}
 
 Under full data, CINN achieves 4.3\% higher RMSE than unconstrained MLP (19.4 vs 18.6 bps) in exchange for 100\% arbitrage-freeness.
