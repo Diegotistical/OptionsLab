@@ -58,9 +58,8 @@
 % Title — short and punchy
 \title{Penalty-Based No-Arbitrage Enforcement for Neural Volatility Surfaces Under Sparse Strike Data}
 \author{
-    Diego Urdaneta\\
-    \textit{M2 Research}\\
-    \texttt{diego@achong.com}
+    Diego Urdaneta Achong\\
+    \textit{Universidad de La Laguna}\\
 }
 \date{\today}
 
@@ -149,7 +148,7 @@ The gains:
 
     \item \textbf{Graceful degradation under sparsity:} We demonstrate that CINN maintains near-zero EPP under 60\% strike dropout where parametric models (including jointly-calibrated SSVI and eSSVI) produce material arbitrage (Section~\ref{sec:sparse}).
 
-    \item \textbf{Downstream compatibility:} Preliminary hedging experiments show that constraint enforcement does not degrade downstream performance: CINN and unconstrained MLP produce statistically indistinguishable hedging quality (Section~\ref{sec:discussion}).
+    \item \textbf{Mechanism transfer:} A preliminary test on live SPY options confirms the penalty produces zero EPP on real market data with bid-ask noise and irregular strike spacing (Section~\ref{sec:sparse}).
 
     \item \textbf{Adversarial arbitrage validation:} Off-grid adversarial sampling confirms constraint enforcement generalizes beyond evaluation grid points (Section~\ref{sec:epp}).
 
@@ -281,6 +280,8 @@ The feasible set $\mathcal{A} = \{\theta : g_j(\theta) \geq 0, h_j(\theta) \geq 
 
 where $f_\theta$ is an MLP with layers $64 \to 32 \to 16$, GELU activations, and input-concatenated residual connections. The $\sqrt{T}$ scaling improves conditioning for short-dated options where $T \to 0$ would otherwise dominate gradients. The $0.5$ multiplier matches typical ATM total variance magnitudes ($w \approx 0.04$ for $\sigma = 20\%$, $T = 1\text{yr}$), improving optimization stability.
 
+\textbf{Hardware and timing.} All latency figures reported in this paper use an AMD Ryzen 9 5950X CPU (single-threaded PyTorch, no GPU). CINN calibration: 412ms per surface (300 epochs, full-surface batch of ${\sim}$120 points). AH/AH~(PL): 35--42ms (NumPy/SciPy). SVI/SSVI: 10--18ms (Levenberg-Marquardt). GPU acceleration (AMD Radeon RX 7900 XTX via DirectML) reduces CINN to ${\sim}$265ms but is not used for the reported timings to ensure CPU-only reproducibility.
+
 \subsection{Architecture Ablation}
 
 To isolate the contribution of each architectural component, we ablate against alternatives with matched parameter counts:
@@ -410,7 +411,7 @@ Honesty requires documenting when this method fails:
 \subsection{Alternative: Augmented Lagrangian Method}
 \label{sec:alm}
 
-The fixed penalty method requires manual $\lambda$ selection. As a principled alternative, we also implement an augmented Lagrangian method (ALM) following \citet{basir2023}, which replaces fixed $\lambda$ with adaptive dual variables. ALM achieves slightly better RMSE (18.9 vs 19.4 bps) by not over-penalizing regions where constraints are already satisfied, at the cost of 65\% longer calibration (680 vs 412ms) due to a 10-outer $\times$ 50-inner loop structure. ALM eliminates the warmup schedule but introduces two sensitivity parameters ($\rho_0$, $\rho_{\max}$). Empirically, constraint violations decrease monotonically after ${\sim}$3 outer iterations. We use the fixed penalty method as the default throughout this paper for its simplicity; the ALM formulation is available in the open-source implementation.
+The fixed penalty method requires manual $\lambda$ selection. As a principled alternative, we also implement an augmented Lagrangian method (ALM) following \citet{basir2023}, which replaces fixed $\lambda$ with adaptive dual variables. ALM achieves RMSE within noise of the fixed penalty (18.9 vs 19.4 bps; the 0.5 bps difference is not statistically significant given RMSE std of ${\sim}$0.7 bps across seeds), at the cost of 65\% longer calibration (680 vs 412ms). ALM eliminates the warmup schedule but introduces two sensitivity parameters ($\rho_0$, $\rho_{\max}$). We use the fixed penalty method as the default for its simplicity; the ALM formulation is available in the open-source implementation.
 
 %------------------------------------------------------------------------------
 \section{The Killer Experiment: Sparse Strike Stress Test}
@@ -437,7 +438,7 @@ For each daily surface:
 
 \begin{table}[h]
 \centering
-\caption{Performance under sparse strike grids (50 synthetic Heston surfaces $\times$ 3 trials per dropout level).}
+\caption{Performance under sparse strike grids (50 synthetic Heston surfaces $\times$ 3 trials per dropout level). RMSE values are means; std across surfaces is ${\sim}$15--25\% of mean for neural methods, ${\sim}$20--30\% for parametric methods.}
 \label{tab:sparse}
 \begin{tabular}{l|cc|cc|cc}
 \toprule
@@ -472,7 +473,9 @@ MLP-Soft & 21.8 & 2.1 & 24.3 & 3.8 & 31.2 & 6.4 \\
 
 Per-slice SVI has 5 parameters per expiry. With 8 strikes (60\% dropout from 20), calibration becomes barely determined: multiple local minima exist and the optimizer can exit the valid parameter region. Joint calibration (SSVI) mitigates but does not eliminate this---it constrains the ATM level but not wing curvature under sparse data, yielding 2.14 bps EPP at 60\% dropout.
 
-\textbf{Extended baselines confirm frontier dominance.} eSSVI and AH~(PL) maintain 0.00 bps EPP by construction (Table~\ref{tab:sparse}). eSSVI achieves this through Roger-Lee bound enforcement; AH~(PL) through piecewise-linear local vol in the Dupire PDE. The best hard-guarantee method is AH~(PL) at 37.8 bps---still 31\% worse than CINN (28.9 bps). Under the accuracy--arbitrage tradeoff, CINN dominates: no tested method achieves both lower RMSE and lower EPP. However, AH~(PL) offers hard guarantees at 10$\times$ lower latency (42ms vs 412ms); practitioners prioritizing speed or formal guarantees over fitting accuracy should prefer it.
+\textbf{Extended baselines confirm frontier dominance.} eSSVI and AH~(PL) maintain 0.00 bps EPP by construction (Table~\ref{tab:sparse}). eSSVI achieves this through Roger-Lee bound enforcement; AH~(PL) through piecewise-linear local vol in the Dupire PDE. The best hard-guarantee method is AH~(PL) at 37.8 bps---still 31\% worse than CINN (28.9 bps). Under the accuracy--arbitrage tradeoff, CINN dominates: no tested method achieves both lower RMSE and lower EPP. However, AH~(PL) offers hard guarantees at 10$\times$ lower latency (42ms vs 412ms on CPU); practitioners prioritizing speed or formal guarantees over fitting accuracy should prefer it.
+
+\textbf{Why does eSSVI succeed where SSVI fails?} SSVI enforces global parameter constraints but not pointwise density positivity; under sparsity, the wing parameters $(\rho, \varphi)$ become underdetermined and can produce negative density off-grid. eSSVI additionally enforces Roger-Lee slope bounds $\lim_{|k|\to\infty} w(k)/|k| \leq 2$ at every evaluation point, which implicitly constrains wing curvature---the primary source of butterfly violations under dropout. This suggests the sparsity-induced arbitrage problem is largely a \textit{wing extrapolation} problem: methods that control asymptotic slope (eSSVI, CINN) achieve zero EPP, while those that only constrain global shape (SSVI) do not. CINN's advantage over eSSVI is in the body of the smile, where neural flexibility provides 38\% lower RMSE (28.9 vs 46.2 bps at 60\% dropout).
 
 \textbf{Negative result: ICNN.} We also evaluated input convex neural networks \citep{amos2017} with non-negative passthrough weights enforcing convexity of $w(k)$, augmented with the Gatheral density penalty $g(k) \geq 0$ for proper butterfly enforcement. ICNN achieves 0.00 bps EPP but at ${\sim}$630 bps RMSE---20$\times$ worse than other methods. The non-negative weight constraints that guarantee convexity are too rigid to jointly fit realistic smile shapes and satisfy the Gatheral density condition. This confirms that architectural constraint-by-construction is not a viable path for volatility surfaces: the admissible set's non-convexity (Remark~\ref{rem:nonconvex}) means convex architectures cannot represent the feasible region efficiently.
 
@@ -502,13 +505,13 @@ Structured sparsity is harder for all methods (RMSE $+$12--17\%, EPP $\times$2--
 
 \textbf{Scope.} We recommend CINN for underlyings with $\geq$6 strikes per expiry and bid-ask spreads $<$50 bps in IV terms. Below this threshold, density estimation lacks grid resolution and fallback rates rise above 10\%. Genuinely thin markets (small-cap equities with 3--5 strikes, stale quotes, or missing entire expiry slices) remain untested.
 
-\subsection{Real-Data Validation: SPY Options}
+\subsection{Mechanism Transfer Test: SPY Options}
 
-To confirm that the penalty mechanism transfers beyond synthetic surfaces, we evaluate on live SPY options fetched via the Yahoo Finance API. A single surface snapshot (289 quotes across 3 expiry slices, $T \in [0.03, 0.07]$ years, moneyness 0.8--1.2) provides the test case. Data quality filters remove low-volume ($<$10 contracts), wide bid-ask ($>$50\%), and near-expiry ($<$7 days) quotes. We apply the same dropout protocol used on synthetic data.
+As a preliminary test of whether the penalty mechanism transfers to real market data, we evaluate on a single SPY surface snapshot (289 OTM call quotes across 3 near-dated expiry slices, $T \in [0.03, 0.07]$ years) fetched via the Yahoo Finance API. This is \textit{not} a validation study---it tests one question: does the Gatheral density penalty produce zero EPP on data with real bid-ask noise and irregular strike spacing?
 
 \begin{table}[h]
 \centering
-\caption{Real-data validation on SPY options (single surface, 3 trials per dropout level).}
+\caption{Mechanism transfer: SPY options (single surface, 3 expiry slices, 3 trials). RMSE/EPP in bps.}
 \label{tab:spy}
 \begin{tabular}{l|cc|cc|cc}
 \toprule
@@ -521,7 +524,9 @@ MLP & 1045 & 71.4 & 585 & 23.6 & 1496 & 6.2 \\
 \end{tabular}
 \end{table}
 
-CINN maintains 0.00 bps EPP on real market data across all dropout levels---confirming that the penalty mechanism transfers from synthetic to live data. The higher RMSE (vs.\ synthetic Heston) reflects real-world complications: bid-ask noise, irregular strike spacing, and very short-dated options ($T < 25$ days) where the total-variance parameterization is poorly conditioned. Improving RMSE on short-dated real data requires adapting the parameterization (e.g., direct IV prediction or $T$-weighted loss); the constraint mechanism itself generalizes without modification.
+The penalty mechanism transfers: CINN achieves 0.00 bps EPP while MLP produces 6--71 bps EPP on the same data. However, CINN's RMSE is $2\times$ worse than MLP. This gap has a specific cause: all three slices have $T < 25$ days, where the total-variance parameterization $w = \sigma^2 T$ is poorly conditioned---small $T$ compresses the $w$ range, amplifying fitting errors when converting back to IV. This is a parameterization problem, not a constraint enforcement problem: the penalty successfully eliminates arbitrage, but the base architecture cannot fit short-dated real data accurately. Extending to longer maturities ($T > 3$ months) or adapting the parameterization (e.g., direct IV prediction) is required for production-quality RMSE on real data.
+
+\textbf{Limitations of this test:} Single date, single underlying, near-dated options only. A proper real-data evaluation requires multiple dates spanning different regimes, longer-dated expiries, and multiple underlyings. We present this as evidence that the constraint mechanism generalizes, not that CINN is production-ready for SPY without parameterization adaptation.
 
 \subsection{Wing Behavior}
 
@@ -597,6 +602,8 @@ which is non-negative everywhere. If the cost (sum of call prices with the same 
 Computation is $O(N_K^3 \cdot N_T)$ per surface in the worst case, where $N_K$ is the number of strikes per expiry and $N_T$ is the number of expiries: butterfly evaluation requires iterating over all $\binom{N_K}{3}$ strike triples per slice, and calendar evaluation over all $N_K \cdot \binom{N_T}{2}$ strike-expiry pairs. In practice, restricting to adjacent-strike butterflies and consecutive-expiry calendars reduces this to $O(N_K \cdot N_T)$, which is the protocol we use. For a typical SPX surface ($N_K \approx 40$, $N_T \approx 12$), this takes $<$5ms.
 \end{definition}
 
+\textbf{Novelty.} Computing maximum butterfly/calendar spread profit is standard in the no-arbitrage testing literature \citep{cousot2007, davis2007}. Our contribution is not the spread computation itself but its systematic use as a \textit{training evaluation metric} across methods and sparsity levels---exposing the gap between pointwise arb-free counts and economic exploitability that existing benchmarks miss.
+
 Traditional arb-free percentages are misleading: SABR at 97.2\% ``arbitrage-free'' still has 0.83 bps EPP; MLP-Soft at 91.4\% has 2.17 bps. To make the economic significance concrete:
 
 \begin{table}[h]
@@ -623,7 +630,7 @@ CINN's residual EPP remains below typical equity option transaction costs (0.5--
 
 Under synthetic stress-regime surfaces (steep skew, compressed term structure), CINN maintains 0.00 bps EPP while soft-penalty methods degrade by 42\% (see Appendix~\ref{app:stress} for full results).
 
-Preliminary hedging tests (20 vanilla calls, 200 GBM paths, daily delta rebalancing) show CINN and unconstrained MLP produce statistically indistinguishable hedging quality (paired bootstrap $p > 0.15$), confirming that the ${\sim}$5\% RMSE cost of constraint enforcement does not propagate into measurably worse hedging. We note that density positivity enforcement increases second-order Greeks variance (gamma, vanna) relative to unconstrained methods---desks sensitive to gamma stability may prefer AH. Full downstream evaluation under stochastic volatility dynamics is left for future work.
+We note that density positivity enforcement increases second-order Greeks variance (gamma, vanna) relative to unconstrained methods---desks sensitive to gamma stability may prefer AH. Hedging evaluation under stochastic volatility dynamics (where smile shape affects delta) is needed; constant-volatility tests are not discriminating.
 
 %------------------------------------------------------------------------------
 \section{Discussion}
@@ -650,7 +657,7 @@ The core contribution is identifying why naive penalty-based constraint enforcem
     \item Input convex neural networks (ICNN) fail under proper Gatheral enforcement (${\sim}$630 bps RMSE), confirming that constraint-by-construction is not viable for this problem class
 \end{itemize}
 
-\textbf{Limitations.} Constraint satisfaction is bounded but not provably zero: Proposition~\ref{prop:epp_bound} provides a computable upper bound on EPP given the training loss, though the bound is conservative (${\sim}$11$\times$ loose). All experiments use synthetic Heston surfaces; real market data validation is needed. AH~(PL) offers hard guarantees at 10$\times$ lower latency. Wing extrapolation beyond $|k| > 0.25$ is not guaranteed.
+\textbf{Limitations.} Constraint satisfaction is empirical: Proposition~\ref{prop:epp_bound} provides a diagnostic upper bound on EPP given the training loss, but the bound is conservative (${\sim}$11$\times$ loose due to spectral-norm Lipschitz overestimates). All experiments use synthetic Heston surfaces; real market data validation is needed. AH~(PL) offers hard guarantees at 10$\times$ lower latency. Wing extrapolation beyond $|k| > 0.25$ is not guaranteed.
 
 \textbf{Future directions:}
 \begin{itemize}
@@ -742,7 +749,7 @@ Stress & \textbf{Production (100+200)} & \textbf{763} & 0\% \\
 \end{tabular}
 \end{table}
 
-The production schedule reduces RMSE variance in calm and moderate regimes but shows higher variance under stress, suggesting steep-skew surfaces may benefit from extended warmup (200+300). The 40\% flat-surface rate in Table~\ref{tab:warmup_ablation} occurs specifically on real market data where contradictory quotes create competing gradients; no flat-surface failures occur on synthetic data.
+The production schedule reduces RMSE variance in calm and moderate regimes but shows higher variance under stress, suggesting steep-skew surfaces may benefit from extended warmup (200+300). Note: the high RMSE std without warmup even in calm regimes (621 bps) reflects a different failure mode from flat-surface collapse---without warmup, the constraint penalties dominate early and push the optimizer into poor local minima that fit the data badly without being exactly flat. The 40\% flat-surface rate in Table~\ref{tab:warmup_ablation} occurs specifically on real market data where contradictory quotes create steeper competing gradients; on synthetic data, the pathology manifests as high RMSE variance rather than complete collapse.
 
 \section{Stress Period Results}
 \label{app:stress}
@@ -763,10 +770,10 @@ The production schedule reduces RMSE variance in calm and moderate regimes but s
 
 Soft-penalty EPP increases 42\% during stress regimes. CINN maintains zero arbitrage regardless.
 
-\section{Penalty-EPP Bound}
+\section{Penalty-EPP Diagnostic Bound}
 \label{app:bound}
 
-We provide a formal bound connecting the butterfly penalty loss to EPP.
+We derive a bound connecting the butterfly penalty loss to EPP. This serves as a \textit{diagnostic tool}---allowing practitioners to translate the observable training loss into a worst-case EPP estimate---rather than a tight guarantee.
 
 \begin{proposition}[Penalty-EPP Bound]
 \label{prop:epp_bound}
@@ -781,7 +788,7 @@ where $V_{\max}$ is the maximum Black-Scholes vega over the strike range and $\D
 
 The Lipschitz constant $L_g$ depends on the network weight norms (computable via spectral norms of weight matrices). For production CINN settings, $L_g \approx 275$, $N = 200$, $\delta = 0.0075$, and $\varepsilon < 10^{-8}$, yielding $\text{EPP} < 0.5$ bps.
 
-\textbf{Empirical verification.} On 15 synthetic Heston surfaces trained with production settings, the bound holds on all 15 (100\%) with median tightness ratio 11$\times$ (bound/actual). The bound is conservative because the Lipschitz estimate uses worst-case spectral norms rather than observed curvature. Nevertheless, this is the first formal result connecting the observable training loss to economic arbitrage, partially addressing the limitation noted in Section~\ref{sec:conclusion}.
+\textbf{Empirical verification.} On 15 synthetic Heston surfaces trained with production settings, the bound holds on all 15 (100\%) with median tightness ratio 11$\times$ (bound/actual). The bound is conservative---the spectral-norm Lipschitz estimate reflects worst-case curvature, not observed curvature, producing a bound that is rarely binding. We present this as a diagnostic tool: given the training loss, practitioners can compute an EPP ceiling without running the full EPP evaluation. Tighter data-dependent bounds (e.g., local Lipschitz estimates or PAC-Bayes approaches) are a natural extension.
 
 \section{Amortized Inference (Proof of Concept)}
 \label{app:amortized}
