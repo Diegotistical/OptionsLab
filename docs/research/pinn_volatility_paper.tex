@@ -280,7 +280,7 @@ The feasible set $\mathcal{A} = \{\theta : g_j(\theta) \geq 0, h_j(\theta) \geq 
 
 where $f_\theta$ is an MLP with layers $64 \to 32 \to 16$, GELU activations, and input-concatenated residual connections. The $\sqrt{T}$ scaling improves conditioning for short-dated options where $T \to 0$ would otherwise dominate gradients. The $0.5$ multiplier matches typical ATM total variance magnitudes ($w \approx 0.04$ for $\sigma = 20\%$, $T = 1\text{yr}$), improving optimization stability.
 
-\textbf{Hardware and timing.} All latency figures reported in this paper use an AMD Ryzen 9 5950X CPU (single-threaded PyTorch, no GPU). CINN calibration: 412ms per surface (300 epochs, full-surface batch of ${\sim}$120 points). AH/AH~(PL): 35--42ms (NumPy/SciPy). SVI/SSVI: 10--18ms (Levenberg-Marquardt). GPU acceleration (AMD Radeon RX 7900 XTX via DirectML) reduces CINN to ${\sim}$265ms but is not used for the reported timings to ensure CPU-only reproducibility.
+\textbf{Hardware and timing.} All latency figures reported in this paper use an AMD Ryzen 7 2700X CPU (single-threaded PyTorch, no GPU). CINN calibration: 412ms per surface (300 epochs, full-surface batch of ${\sim}$120 points). AH/AH~(PL): 35--42ms (NumPy/SciPy). SVI/SSVI: 10--18ms (Levenberg-Marquardt). GPU acceleration (AMD Radeon RX 7900 XTX via DirectML) reduces CINN to ${\sim}$265ms but is not used for the reported timings to ensure CPU-only reproducibility.
 
 \subsection{Architecture Ablation}
 
