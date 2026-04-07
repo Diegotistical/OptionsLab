@@ -217,13 +217,23 @@ def run_benchmark(surface: pd.DataFrame, n_trials: int = 5) -> pd.DataFrame:
                 continue
 
             for model_name, ModelClass, kwargs in [
-                ("CINN", PINNVolatilityModel, dict(
+                ("CINN (w)", PINNVolatilityModel, dict(
                     hidden_layers=[64, 32, 16],
                     lambda_calendar=5.0,
                     lambda_butterfly=10.0,
                     lambda_wing=1.0,
                     epochs=300,
                     learning_rate=3e-3,
+                    output_space="total_variance",
+                )),
+                ("CINN (IV)", PINNVolatilityModel, dict(
+                    hidden_layers=[64, 32, 16],
+                    lambda_calendar=5.0,
+                    lambda_butterfly=10.0,
+                    lambda_wing=1.0,
+                    epochs=300,
+                    learning_rate=3e-3,
+                    output_space="implied_vol",
                 )),
                 ("MLP", PINNVolatilityModel, dict(
                     hidden_layers=[64, 32, 16],

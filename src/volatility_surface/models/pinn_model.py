@@ -226,6 +226,7 @@ if TORCH_AVAILABLE:
             dropout: float = 0.1,
             use_residual: bool = True,
             activation: str = "gelu",
+            output_space: str = "total_variance",
         ):
             super().__init__()
 
@@ -234,6 +235,7 @@ if TORCH_AVAILABLE:
 
             self.input_dim = input_dim
             self.use_residual = use_residual
+            self.output_space = output_space
 
             # Activation factory
             def make_activation(name: str):
@@ -265,8 +267,8 @@ if TORCH_AVAILABLE:
             # Output layer: produces total variance
             self.output = nn.Linear(prev_dim, 1)
 
-            # Softplus to ensure positivity
-            self.softplus = nn.Softplus(beta=5.0)
+            # Softplus to ensure positivity (lower beta for IV mode = smoother)
+            self.softplus = nn.Softplus(beta=5.0 if output_space == "total_variance" else 2.0)
 
             # Wing asymptote parameters (learnable)
             self.wing_slope = nn.Parameter(torch.tensor(0.1))
@@ -297,21 +299,26 @@ if TORCH_AVAILABLE:
 
             raw_output = self.output(h)
 
-            # Ensure positive total variance with minimum
-            w = self.softplus(raw_output) * 0.5 + 1e-6
+            # Ensure positivity with minimum
+            return self.softplus(raw_output) * 0.5 + 1e-6
 
-            return w
+        def total_variance(self, x: torch.Tensor) -> torch.Tensor:
+            """Return total variance w, regardless of output_space."""
+            out = self.forward(x)
+            if self.output_space == "implied_vol":
+                sqrt_T = x[:, 1:2]
+                T = sqrt_T ** 2 + 1e-10
+                return out ** 2 * T  # w = σ²T
+            return out
 
         def implied_vol(self, x: torch.Tensor) -> torch.Tensor:
-            """Compute implied volatility from total variance."""
-            # x[:, 1] is sqrt_T, so T = x[:, 1]**2
+            """Return implied volatility σ, regardless of output_space."""
+            out = self.forward(x)
+            if self.output_space == "implied_vol":
+                return out
             sqrt_T = x[:, 1:2]
-            T = sqrt_T**2 + 1e-10
-
-            w = self.forward(x)
-            sigma = torch.sqrt(w / T)
-
-            return sigma
+            T = sqrt_T ** 2 + 1e-10
+            return torch.sqrt(out / T)
 
     class CalendarLoss(nn.Module):
         """
@@ -334,10 +341,12 @@ if TORCH_AVAILABLE:
             Compute calendar arbitrage penalty.
 
             Uses automatic differentiation to compute ∂w/∂T.
+            Works with both total_variance and implied_vol output spaces.
             """
             x.requires_grad_(True)
 
-            w = model(x)
+            # Always compute in total-variance space for correct constraint math
+            w = model.total_variance(x) if hasattr(model, "total_variance") else model(x)
 
             # Compute gradient w.r.t. sqrt_T (index 1)
             grad_w = torch.autograd.grad(
@@ -385,7 +394,8 @@ if TORCH_AVAILABLE:
             """
             x.requires_grad_(True)
 
-            w = model(x)
+            # Always compute in total-variance space for correct Gatheral math
+            w = model.total_variance(x) if hasattr(model, "total_variance") else model(x)
             k = x[:, 0:1]  # log-moneyness
             sqrt_T = x[:, 1:2]
             T = sqrt_T**2 + self.epsilon
@@ -519,6 +529,8 @@ class PINNVolatilityModel(VolatilityModelBase):
         early_stop_patience: int = 20,
         early_stop_rmse_tol: float = 1e-5,
         early_stop_epp_threshold: float = 1e-4,
+        # Output parameterization
+        output_space: str = "total_variance",
     ):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for PINNVolatilityModel")
@@ -544,6 +556,7 @@ class PINNVolatilityModel(VolatilityModelBase):
         self.use_warmup = use_warmup
         self.use_ema_norm = use_ema_norm
         self.squared_hinge = squared_hinge
+        self.output_space = output_space
         # Early stopping
         self.early_stopping = early_stopping
         self.early_stop_patience = early_stop_patience
@@ -575,9 +588,12 @@ class PINNVolatilityModel(VolatilityModelBase):
             t_idx = self.feature_columns.index("T")
             X_transformed[:, t_idx] = np.sqrt(X_transformed[:, t_idx])
 
-        # Compute target as total variance w = σ²T
+        # Compute training target based on output_space
         T = X[:, t_idx] if "T" in self.feature_columns else 1.0
-        w = y**2 * T
+        if self.output_space == "implied_vol":
+            w = y  # target is IV directly
+        else:
+            w = y**2 * T  # target is total variance
 
         # Split data
         n_val = int(len(X) * val_split) if val_split > 0 else 0
@@ -600,6 +616,7 @@ class PINNVolatilityModel(VolatilityModelBase):
             dropout=self.dropout,
             use_residual=self.use_residual,
             activation=self.activation,
+            output_space=self.output_space,
         ).to(self.device)
 
         # Loss functions
@@ -915,6 +932,7 @@ class PINNVolatilityModel(VolatilityModelBase):
                 "lambda_wing": self.lambda_wing,
                 "training_history": self.training_history,
                 "dropout": self.dropout,
+                "output_space": self.output_space,
             },
             model_path,
         )
@@ -930,10 +948,12 @@ class PINNVolatilityModel(VolatilityModelBase):
         self.lambda_wing = checkpoint["lambda_wing"]
         self.training_history = checkpoint.get("training_history", [])
 
+        self.output_space = checkpoint.get("output_space", "total_variance")
         self.model = PINNNetwork(
             input_dim=len(self.feature_columns),
             hidden_layers=self.hidden_layers,
             dropout=checkpoint.get("dropout", self.dropout),
+            output_space=self.output_space,
         ).to(self.device)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
