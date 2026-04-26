@@ -1,190 +1,157 @@
 # src/pricing_models/monte_carlo.py
-"""
-Ultra-Fast Monte Carlo Option Pricing Engine.
-
-Optimizations:
-    - Single-step mode for European options (analytically equivalent, 100x faster)
-    - Antithetic variates built into all backends (2x variance reduction)
-    - Pluggable simulation backends (NumPy/Numba/QMC)
-    - Minimal overhead orchestration
-
-Usage:
-    >>> from src.pricing_models.monte_carlo import MonteCarloPricer, MCMethod
-    >>> pricer = MonteCarloPricer(n_paths=100000)  # Single-step default = fast
-    >>> price = pricer.price(S=100, K=100, T=1.0, r=0.05, sigma=0.2, option_type='call')
-"""
-
-from dataclasses import dataclass
-from enum import Enum
-from typing import Literal, Optional, Union
 
 import numpy as np
+from typing import Optional, Literal, Callable
+try:
+    from numba import njit
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
 
-from src.simulation.gbm_numba import NUMBA_AVAILABLE, simulate_gbm_numba
-from src.simulation.gbm_numpy import simulate_gbm_numpy, simulate_gbm_numpy_fast
-from src.simulation.gbm_qmc import simulate_gbm_qmc
+from ..exceptions.montecarlo_exceptions import MonteCarloError, InputValidationError
 
-
-class MCMethod(Enum):
-    """Monte Carlo simulation backend."""
-
-    NUMPY = "numpy"
-    NUMBA = "numba"
-    QMC = "qmc"
-    FAST = "fast"  # Single-step, maximum speed
-
-
-@dataclass
-class MCResult:
-    """Monte Carlo result with statistics."""
-
-    price: float
-    std_error: float = 0.0
-    n_paths: int = 0
-
+__all__ = ['MonteCarloPricer']
 
 class MonteCarloPricer:
     """
-    Production Monte Carlo pricer.
-
-    Defaults to single-step mode which is analytically exact for
-    European options and ~100x faster than multi-step.
+    Monte Carlo option pricer adapted for Exotic Options and High Volatility.
     """
-
-    __slots__ = ("num_simulations", "num_steps", "seed", "method", "_use_numba")
 
     def __init__(
         self,
-        num_simulations: int = 100000,
-        num_steps: int = 1,  # Default to single-step = fast
+        num_simulations: int = 250000,
+        num_steps: int = 84,
         seed: Optional[int] = None,
-        method: MCMethod = MCMethod.NUMPY,
+        use_numba: bool = False
     ):
-        if num_simulations < 1:
-            raise ValueError("num_simulations must be >= 1")
+        if num_simulations <= 0 or num_steps <= 0:
+            raise InputValidationError("num_simulations and num_steps must be positive integers")
+        if use_numba and not NUMBA_AVAILABLE:
+            raise MonteCarloError("Numba not installed; cannot enable acceleration")
 
         self.num_simulations = num_simulations
         self.num_steps = num_steps
-        self.seed = (
-            seed if seed is not None else np.random.default_rng().integers(0, 2**31)
-        )
-        self.method = method
-        self._use_numba = NUMBA_AVAILABLE and method == MCMethod.NUMBA
+        self.rng = np.random.default_rng(seed)
+        self.use_numba = use_numba
 
-    def _simulate(
-        self,
-        S: float,
-        T: float,
-        r: float,
-        sigma: float,
-        q: float,
-        seed: Optional[int] = None,
+    def _validate_inputs(
+        self, S: float, K: float, T: float, r: float, sigma: float, option_type: str, q: float
+    ):
+        # 1. ACTUALIZADO: Permite los nombres de las opciones exóticas del reto
+        valid_options = {"call", "put", "ko_put", "chooser", "binary_put"}
+        if option_type not in valid_options:
+            raise InputValidationError(f"option_type must be one of {valid_options}")
+        if S <= 0 or K <= 0 or T <= 0 or sigma < 0 or q < 0:
+            raise InputValidationError("Spot, strike, T, sigma, and q must be non-negative and T > 0")
+
+    def _clean_sigma(self, sigma: float) -> float:
+        # 2. NUEVO: Auto-corrector de porcentajes. 
+        # Si pones 300, lo convierte a 3.0 automáticamente para evitar el colapso matemático.
+        if sigma >= 10.0:
+            return sigma / 100.0
+        return sigma
+
+    def _simulate_terminal_prices_vectorized(
+        self, S: float, T: float, r: float, sigma: float, q: float
     ) -> np.ndarray:
-        """Dispatch to simulation backend."""
-        actual_seed = seed if seed is not None else self.seed
+        
+        # Aplicamos el filtro de porcentaje aquí
+        sigma = self._clean_sigma(sigma)
 
-        # Fast single-step mode
-        if self.method == MCMethod.FAST or (
-            self.num_steps == 1 and self.method == MCMethod.NUMPY
-        ):
-            return simulate_gbm_numpy_fast(
-                S, T, r, sigma, q, self.num_simulations, actual_seed
-            )
+        dt = T / self.num_steps
+        drift = (r - q - 0.5 * sigma ** 2) * dt
+        vol = sigma * np.sqrt(dt)
 
-        if self.method == MCMethod.QMC:
-            return simulate_gbm_qmc(
-                S, T, r, sigma, q, self.num_simulations, self.num_steps, actual_seed
-            )
+        rand_normals = self.rng.normal(size=(self.num_simulations, self.num_steps))
+        antithetic = -rand_normals
 
-        if self._use_numba:
-            return simulate_gbm_numba(
-                S, T, r, sigma, q, self.num_simulations, self.num_steps, actual_seed
-            )
+        log_paths_pos = np.log(S) + np.cumsum(drift + vol * rand_normals, axis=1)
+        log_paths_neg = np.log(S) + np.cumsum(drift + vol * antithetic, axis=1)
 
-        return simulate_gbm_numpy(
-            S, T, r, sigma, q, self.num_simulations, self.num_steps, actual_seed
-        )
+        # 3. ACTUALIZADO: Devuelve la matriz COMPLETA de caminos, no solo el final
+        paths_pos = np.exp(log_paths_pos)
+        paths_neg = np.exp(log_paths_neg)
+
+        return np.concatenate([paths_pos, paths_neg], axis=0)
+
+    def _simulate_terminal_prices_numba(
+        self, S: float, T: float, r: float, sigma: float, q: float
+    ) -> np.ndarray:
+        # Nota: Numba no se actualizó para devolver el camino completo en esta versión.
+        # Usa use_numba=False para evaluar las opciones exóticas.
+        pass
+
+    def _simulate_terminal_prices(
+        self, S: float, T: float, r: float, sigma: float, q: float
+    ) -> np.ndarray:
+        if self.use_numba:
+            return self._simulate_terminal_prices_numba(S, T, r, sigma, q)
+        return self._simulate_terminal_prices_vectorized(S, T, r, sigma, q)
 
     def price(
-        self,
-        S: float,
-        K: float,
-        T: float,
-        r: float,
-        sigma: float,
-        option_type: Literal["call", "put"],
-        q: float = 0.0,
-        seed: Optional[int] = None,
-        return_error: bool = False,
-    ) -> Union[float, MCResult]:
-        """
-        Price European option.
-
-        Args:
-            S, K, T, r, sigma: Standard option params.
-            option_type: 'call' or 'put'.
-            q: Dividend yield.
-            seed: Optional seed override.
-            return_error: Return MCResult with std error.
-
-        Returns:
-            Price (float) or MCResult.
-        """
-        if T <= 0:
-            intrinsic = max(S - K, 0) if option_type == "call" else max(K - S, 0)
-            return MCResult(intrinsic, 0.0, 0) if return_error else intrinsic
-
-        terminal = self._simulate(S, T, r, sigma, q, seed)
-
-        # Vectorized payoff
-        if option_type == "call":
-            payoffs = np.maximum(terminal - K, 0.0)
-        else:
-            payoffs = np.maximum(K - terminal, 0.0)
-
-        discount = np.exp(-r * T)
-        price = float(discount * np.mean(payoffs))
-
-        if return_error:
-            std_error = float(discount * np.std(payoffs) / np.sqrt(len(payoffs)))
-            return MCResult(price, std_error, len(payoffs))
-
-        return price
-
-    def price_with_control_variate(
-        self,
-        S: float,
-        K: float,
-        T: float,
-        r: float,
-        sigma: float,
-        option_type: Literal["call", "put"],
-        q: float = 0.0,
-        seed: Optional[int] = None,
+        self, S: float, K: float, T: float, r: float, sigma: float,
+        option_type: str, q: float = 0.0
     ) -> float:
-        """
-        Price with terminal spot as control variate.
+        
+        self._validate_inputs(S, K, T, r, sigma, option_type, q)
 
-        Control: E[S_T] = S * exp((r-q)*T)
-        """
-        terminal = self._simulate(S, T, r, sigma, q, seed)
+        # Genera los caminos completos
+        paths = self._simulate_terminal_prices(S, T, r, sigma, q)
+        
+        # El precio final está en la última columna
+        terminal_prices = paths[:, -1]
 
+        # 4. ACTUALIZADO: Lógica de Exóticas integrada
         if option_type == "call":
-            payoffs = np.maximum(terminal - K, 0.0)
-        else:
-            payoffs = np.maximum(K - terminal, 0.0)
+            payoffs = np.maximum(terminal_prices - K, 0.0)
+            
+        elif option_type == "put":
+            payoffs = np.maximum(K - terminal_prices, 0.0)
+            
+        elif option_type == "ko_put":
+            # Lógica de la barrera (Lava) en 45
+            hit_barrier = np.any(paths <= 45.0, axis=1)
+            payoffs = np.maximum(K - terminal_prices, 0.0)
+            payoffs[hit_barrier] = 0.0
+            
+        elif option_type == "chooser":
+            # Elige entre Call y Put en el paso 56 (Día 14)
+            precio_dia_14 = paths[:, 55] 
+            es_call = precio_dia_14 > K
+            pago_call = np.maximum(terminal_prices - K, 0.0)
+            pago_put = np.maximum(K - terminal_prices, 0.0)
+            payoffs = np.where(es_call, pago_call, pago_put)
+            
+        elif option_type == "binary_put":
+            # Paga 100 fijo si termina por debajo del Strike
+            payoffs = np.where(terminal_prices < K, 100.0, 0.0)
 
-        discounted = np.exp(-r * T) * payoffs
+        # Descuenta el valor al presente (Aunque con r=0 no afecta)
+        return np.exp(-r * T) * np.mean(payoffs)
 
-        # Control variate adjustment
-        control_mean = np.mean(terminal)
-        forward = S * np.exp((r - q) * T)
+    # (Puedes mantener los métodos de las letras Griegas igual, 
+    #  solo asegúrate de que usen el sigma corregido si los llamas directamente).
+    def delta(self, S, K, T, r, sigma, option_type, q=0.0, h=1e-4):
+        return (self.price(S + h, K, T, r, sigma, option_type, q) -
+                self.price(S - h, K, T, r, sigma, option_type, q)) / (2 * h)
 
-        cov = np.cov(discounted, terminal)
-        beta = cov[0, 1] / cov[1, 1] if cov[1, 1] > 1e-10 else 0.0
+    def gamma(self, S, K, T, r, sigma, option_type, q=0.0, h=1e-4):
+        price_up = self.price(S + h, K, T, r, sigma, option_type, q)
+        price_mid = self.price(S, K, T, r, sigma, option_type, q)
+        price_down = self.price(S - h, K, T, r, sigma, option_type, q)
+        return (price_up - 2 * price_mid + price_down) / (h * h)
 
-        return float(np.mean(discounted) - beta * (control_mean - forward))
+    def vega(self, S, K, T, r, sigma, option_type, q=0.0, h=1e-4):
+        sigma = self._clean_sigma(sigma) # Limpiamos antes de mutar
+        return (self.price(S, K, T, r, sigma + h, option_type, q) -
+                self.price(S, K, T, r, sigma - h, option_type, q)) / (2 * h)
 
+    def theta(self, S, K, T, r, sigma, option_type, q=0.0, dt=1/365):
+        if T > dt:
+            return (self.price(S, K, T - dt, r, sigma, option_type, q) -
+                    self.price(S, K, T, r, sigma, option_type, q)) / dt
+        return -self.price(S, K, T, r, sigma, option_type, q) / dt
 
-# Keep NUMBA_AVAILABLE export for backward compatibility
-__all__ = ["MonteCarloPricer", "MCMethod", "MCResult", "NUMBA_AVAILABLE"]
+    def rho(self, S, K, T, r, sigma, option_type, q=0.0, h=1e-4):
+        return (self.price(S, K, T, r + h, sigma, option_type, q) -
+                self.price(S, K, T, r, sigma, option_type, q)) / h
